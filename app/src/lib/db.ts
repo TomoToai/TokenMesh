@@ -1,10 +1,27 @@
 import Database from "better-sqlite3";
 import path from "path";
 import bcrypt from "bcryptjs";
+import { v4 as uuidv4 } from "uuid";
 
 const DB_PATH = path.join(process.cwd(), "tokenmesh.db");
 
 let _db: Database.Database | null = null;
+
+type UserRow = {
+  id: string;
+  email: string;
+  password_hash: string;
+  name: string;
+  created_at?: string;
+};
+
+type ConversationRow = {
+  id: string;
+  user_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+};
 
 export function getDb(): Database.Database {
   if (!_db) {
@@ -51,15 +68,14 @@ function initDb(db: Database.Database) {
 
 export async function createUser(email: string, password: string, name: string) {
   const db = getDb();
-  const { v4: uuidv4 } = await import("uuid");
   const id = uuidv4();
   const passwordHash = await bcrypt.hash(password, 10);
 
   try {
     db.prepare("INSERT INTO users (id, email, password_hash, name) VALUES (?, ?, ?, ?)").run(id, email, passwordHash, name);
     return { id, email, name };
-  } catch (err: any) {
-    if (err.message?.includes("UNIQUE constraint")) {
+  } catch (err: unknown) {
+    if (err instanceof Error && err.message.includes("UNIQUE constraint")) {
       throw new Error("EMAIL_EXISTS");
     }
     throw err;
@@ -68,7 +84,7 @@ export async function createUser(email: string, password: string, name: string) 
 
 export function verifyUser(email: string, password: string) {
   const db = getDb();
-  const row = db.prepare("SELECT id, email, password_hash, name FROM users WHERE email = ?").get(email) as any;
+  const row = db.prepare("SELECT id, email, password_hash, name FROM users WHERE email = ?").get(email) as UserRow | undefined;
   if (!row) return null;
 
   const valid = bcrypt.compareSync(password, row.password_hash);
@@ -79,13 +95,12 @@ export function verifyUser(email: string, password: string) {
 
 export function getUserById(id: string) {
   const db = getDb();
-  const row = db.prepare("SELECT id, email, name, created_at FROM users WHERE id = ?").get(id) as any;
+  const row = db.prepare("SELECT id, email, name, created_at FROM users WHERE id = ?").get(id) as Omit<UserRow, "password_hash"> | undefined;
   return row || null;
 }
 
 export function createConversation(userId: string, title?: string) {
   const db = getDb();
-  const { v4: uuidv4 } = require("uuid");
   const id = uuidv4();
   db.prepare("INSERT INTO conversations (id, user_id, title) VALUES (?, ?, ?)").run(id, userId, title || "New Chat");
   return { id, userId, title: title || "New Chat" };
@@ -98,12 +113,11 @@ export function getConversationsByUserId(userId: string) {
 
 export function getConversationById(id: string, userId: string) {
   const db = getDb();
-  return db.prepare("SELECT id, user_id, title, created_at, updated_at FROM conversations WHERE id = ? AND user_id = ?").get(id, userId) as any;
+  return db.prepare("SELECT id, user_id, title, created_at, updated_at FROM conversations WHERE id = ? AND user_id = ?").get(id, userId) as ConversationRow | undefined;
 }
 
 export function addMessage(conversationId: string, role: string, content: string) {
   const db = getDb();
-  const { v4: uuidv4 } = require("uuid");
   const id = uuidv4();
   db.prepare("INSERT INTO messages (id, conversation_id, role, content) VALUES (?, ?, ?, ?)").run(id, conversationId, role, content);
   db.prepare("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?").run(conversationId);

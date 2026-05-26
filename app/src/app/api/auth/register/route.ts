@@ -26,8 +26,8 @@ export async function POST(req: NextRequest) {
       path: "/",
     });
     return res;
-  } catch (err: any) {
-    if (err.message === "EMAIL_EXISTS") {
+  } catch (err: unknown) {
+    if (err instanceof Error && err.message === "EMAIL_EXISTS") {
       return NextResponse.json({ error: "Email already registered" }, { status: 409 });
     }
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
