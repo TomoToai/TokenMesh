@@ -30,6 +30,9 @@ TokenMesh 不仅仅是一个大模型聚合网关——我们是 **Web3 原生**
 - ✅ 用户注册 / 登录 / 退出（JWT + bcrypt 加密）
 - ✅ Chat 对话页面（流式输出，打字效果）
 - ✅ 豆包 Seed 2.0 Pro 模型对接（火山方舟 Ark API）
+- ✅ 模型选择器（支持 1-3 个模型使用同一 Prompt 做并行评测）
+- ✅ 模型评测结果展示（耗时、计费输入 Tokens、输出 Tokens、总 Tokens）
+- ✅ Reasoning / Answer 折叠展示，便于对比长推理结果
 - ✅ 本地文件上传（文本 / PDF / 图片）
 - ✅ PDF 文本抽取并作为本轮对话上下文
 - ✅ 图片上传并按多模态消息传给模型
@@ -39,6 +42,29 @@ TokenMesh 不仅仅是一个大模型聚合网关——我们是 **Web3 原生**
 - ✅ 暗色主题 UI
 
 > 当前文件上传是 MVP 方案：文件内容仅用于本轮 Chat 上下文，暂不做对象存储、长期文件管理和复杂文档解析流水线。
+
+## Chat 模型评测能力
+
+Chat 页面顶部提供模型选择器，当前支持从火山方舟模型中选择 1-3 个模型，用同一个处理后的 Prompt 并行调用并对比输出。
+
+当前内置模型：
+
+| TokenMesh 模型 ID | 方舟模型 ID | 说明 |
+|-------------------|-------------|------|
+| `tokenmesh-doubao-seed-2-0-pro-260215` | `doubao-seed-2-0-pro-260215` | 豆包 Seed 2.0 Pro |
+| `tokenmesh-doubao-seed-2-0-lite-260428` | `doubao-seed-2-0-lite-260428` | 豆包 Seed 2.0 lite |
+| `tokenmesh-deepseek-v4-flash` | `deepseek-v4-flash` | DeepSeek V4 Flash |
+
+评测结果会按模型分卡片展示：
+
+- 调用耗时
+- 计费输入 Tokens
+- 输出 Tokens
+- 总 Tokens
+- Reasoning（默认折叠）
+- Answer（默认折叠）
+
+说明：计费输入 Tokens 来自模型服务返回的 `usage.prompt_tokens`。即使 TokenMesh 给多个模型传入同一份处理后的 Prompt，不同模型由于 tokenizer、厂商内部模板和计费口径差异，返回的输入 Tokens 也可能不同。
 
 ## 技术栈
 
@@ -124,7 +150,8 @@ TokenMesh/
     ├── src/
     │   ├── lib/
     │   │   ├── auth.ts             # JWT 认证
-    │   │   └── db.ts               # SQLite 数据库
+    │   │   ├── db.ts               # SQLite 数据库
+    │   │   └── models.ts           # 模型配置与模型 ID 规范化
     │   └── app/
     │       ├── page.tsx            # 首页
     │       ├── login/page.tsx      # 登录页
@@ -170,12 +197,13 @@ npm run build
 ### V1 — MVP（当前）
 - 用户认证系统
 - 豆包 Seed 2.0 对话
+- 多模型选择器与并行评测
+- 模型耗时 / Tokens / Reasoning / Answer 展示
 - 对话管理
 - Chat 文件上传（文本 / PDF / 图片）
 
 ### V2 — 增强功能
 - 多模型支持（OpenAI / Claude / Gemini / DeepSeek）
-- 模型选择器
 - 联网搜索（Web Search）
 - 国内支付闭环（10 元固定充值商品）
 - 模型市场页面

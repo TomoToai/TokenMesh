@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { DEFAULT_MODEL_ID, MAX_SELECTED_MODELS, MODEL_CONFIGS } from "@/lib/models";
 
 interface User {
   id: string;
@@ -22,6 +23,7 @@ interface Message {
   role: "user" | "assistant" | "system";
   content: string;
   created_at: string;
+  modelResults?: ModelRunResult[];
 }
 
 interface ChatAttachment {
@@ -32,6 +34,21 @@ interface ChatAttachment {
   size: number;
   content?: string;
   dataUrl?: string;
+}
+
+interface ModelRunResult {
+  modelId: string;
+  providerModelId: string;
+  modelName: string;
+  status: "success" | "error";
+  content: string;
+  reasoning: string;
+  reasoningAvailable: boolean;
+  durationMs: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  error: string;
 }
 
 const MAX_ATTACHMENT_COUNT = 3;
@@ -48,6 +65,26 @@ function buildLocalDisplayMessage(text: string, attachments: ChatAttachment[]) {
   if (attachments.length === 0) return text;
   const fileList = attachments.map((file) => `- ${file.name}`).join("\n");
   return `${text || "请分析我上传的文件"}\n\n已附加文件：\n${fileList}`;
+}
+
+function buildAssistantSummary(results: ModelRunResult[]) {
+  return results
+    .map((result) => {
+      const tokens = result.totalTokens ? `${result.totalTokens} tokens` : "Tokens 未返回";
+      const header = `${result.modelName} · ${(result.durationMs / 1000).toFixed(2)}s · ${tokens}`;
+      if (result.status === "error") return `${header}\n${result.error}`;
+      return `${header}\n${result.content || "（无输出）"}`;
+    })
+    .join("\n\n---\n\n");
+}
+
+function formatDuration(ms: number) {
+  if (!ms) return "-";
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
+function formatTokens(value: number) {
+  return value ? value.toLocaleString() : "-";
 }
 
 function readFileAsDataUrl(file: File) {
@@ -67,11 +104,15 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
-  const [streamContent, setStreamContent] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [selectedModelIds, setSelectedModelIds] = useState<string[]>([DEFAULT_MODEL_ID]);
+  const [showModelMenu, setShowModelMenu] = useState(false);
+  const [runningModelIds, setRunningModelIds] = useState<string[]>([]);
+  const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
+  const [expandedAnswers, setExpandedAnswers] = useState<Record<string, boolean>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -101,7 +142,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamContent]);
+  }, [messages, runningModelIds]);
 
   const loadMessages = useCallback(async (convId: string) => {
     const res = await fetch(`/api/conversations/${convId}`);
@@ -139,11 +180,12 @@ export default function ChatPage() {
   };
 
   const sendMessage = async () => {
-    const text = input.trim();
+    const text = (inputRef.current?.value || input).trim();
     if ((!text && attachments.length === 0) || streaming || uploadingFile) return;
 
     setError("");
     const attachmentsToSend = attachments;
+    const modelIdsToSend = selectedModelIds;
     const title = text ? text.slice(0, 30) : `文件：${attachmentsToSend[0]?.name || "新对话"}`;
 
     if (!activeConvId) {
@@ -156,18 +198,18 @@ export default function ChatPage() {
         const data = await res.json();
         setConversations((prev) => [data.conversation, ...prev]);
         setActiveConvId(data.conversation.id);
-        await doStream(data.conversation.id, text, attachmentsToSend);
+        await doStream(data.conversation.id, text, attachmentsToSend, modelIdsToSend);
       }
     } else {
-      await doStream(activeConvId, text, attachmentsToSend);
+      await doStream(activeConvId, text, attachmentsToSend, modelIdsToSend);
     }
   };
 
-  const doStream = async (convId: string, text: string, files: ChatAttachment[]) => {
+  const doStream = async (convId: string, text: string, files: ChatAttachment[], modelIds: string[]) => {
     setInput("");
     setAttachments([]);
     setStreaming(true);
-    setStreamContent("");
+    setRunningModelIds(modelIds);
     setError("");
 
     const userMsg: Message = {
@@ -182,7 +224,7 @@ export default function ChatPage() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ conversationId: convId, message: text, attachments: files }),
+        body: JSON.stringify({ conversationId: convId, message: text, attachments: files, modelIds }),
       });
 
       if (!res.ok) {
@@ -196,10 +238,20 @@ export default function ChatPage() {
         return;
       }
 
+      const assistantId = "temp-assistant-" + Date.now();
+      const assistantMsg: Message = {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        created_at: new Date().toISOString(),
+        modelResults: [],
+      };
+      setMessages((prev) => [...prev, assistantMsg]);
+
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      let fullContent = "";
+      let currentResults: ModelRunResult[] = [];
 
       while (true) {
         const { done, value } = await reader.read();
@@ -212,38 +264,40 @@ export default function ChatPage() {
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed || !trimmed.startsWith("data: ")) continue;
-          const data = trimmed.slice(6);
-          if (data === "[DONE]") continue;
 
           try {
-            const parsed = JSON.parse(data);
-            if (parsed.error) {
-              setError(parsed.error);
-              setStreaming(false);
-              return;
+            const parsed = JSON.parse(trimmed.slice(6));
+            if (parsed.type === "error") {
+              setError(parsed.error || "模型调用失败");
+              continue;
             }
-            if (parsed.content) {
-              fullContent += parsed.content;
-              setStreamContent(fullContent);
+
+            if (parsed.type === "result" && parsed.result) {
+              const result = parsed.result as ModelRunResult;
+              currentResults = [...currentResults.filter((item) => item.modelId !== result.modelId), result];
+              setRunningModelIds((prev) => prev.filter((id) => id !== result.modelId));
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === assistantId
+                    ? {
+                        ...msg,
+                        content: buildAssistantSummary(currentResults),
+                        modelResults: currentResults,
+                      }
+                    : msg
+                )
+              );
             }
           } catch {
-            // skip
+            // skip malformed chunks
           }
         }
       }
-
-      const assistantMsg: Message = {
-        id: "temp-assistant-" + Date.now(),
-        role: "assistant",
-        content: fullContent,
-        created_at: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
-      setStreamContent("");
     } catch {
       setError("网络请求失败，请检查网络连接后重试。");
     } finally {
       setStreaming(false);
+      setRunningModelIds([]);
       loadConversations();
     }
   };
@@ -318,6 +372,127 @@ export default function ChatPage() {
 
   const removeAttachment = (id: string) => {
     setAttachments((prev) => prev.filter((file) => file.id !== id));
+  };
+
+  const toggleModel = (modelId: string) => {
+    setSelectedModelIds((prev) => {
+      if (prev.includes(modelId)) {
+        return prev.length === 1 ? prev : prev.filter((id) => id !== modelId);
+      }
+      if (prev.length >= MAX_SELECTED_MODELS) return prev;
+      return [...prev, modelId];
+    });
+    setShowModelMenu(false);
+  };
+
+  const selectedModels = MODEL_CONFIGS.filter((model) => selectedModelIds.includes(model.id));
+
+  const renderModelResult = (result: ModelRunResult, messageId: string) => {
+    const reasoningKey = `${messageId}:${result.modelId}`;
+    const answerKey = `${messageId}:${result.modelId}`;
+
+    return (
+    <div key={result.modelId} className="rounded-xl border border-border bg-card overflow-hidden">
+      <div className="flex items-start justify-between gap-4 border-b border-border px-4 py-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <div className={`h-2 w-2 rounded-full ${result.status === "success" ? "bg-green-400" : "bg-red-400"}`} />
+            <div className="text-sm font-medium text-foreground">{result.modelName}</div>
+          </div>
+          <div className="mt-1 text-[11px] text-muted">{result.providerModelId}</div>
+        </div>
+        <div className="grid grid-cols-4 gap-2 text-right text-[11px] text-muted">
+          <div>
+            <div className="text-foreground">{formatDuration(result.durationMs)}</div>
+            <div>耗时</div>
+          </div>
+          <div>
+            <div className="text-foreground">{formatTokens(result.promptTokens)}</div>
+            <div title="由模型服务返回的 prompt tokens，不同模型 tokenizer 可能不同">计费输入</div>
+          </div>
+          <div>
+            <div className="text-foreground">{formatTokens(result.completionTokens)}</div>
+            <div>输出</div>
+          </div>
+          <div>
+            <div className="text-foreground">{formatTokens(result.totalTokens)}</div>
+            <div>总计</div>
+          </div>
+        </div>
+      </div>
+      <div className="border-b border-border px-4 py-3">
+        <button
+          type="button"
+          onClick={() =>
+            setExpandedReasoning((prev) => ({
+              ...prev,
+              [reasoningKey]: !prev[reasoningKey],
+            }))
+          }
+          className="flex w-full items-center justify-between text-left"
+        >
+          <span className="text-xs font-medium text-muted">Reasoning</span>
+          <span className="text-xs text-primary">
+            {expandedReasoning[reasoningKey] ? "收起" : "展开"}
+          </span>
+        </button>
+        {expandedReasoning[reasoningKey] ? (
+          <div className="mt-2 max-h-80 overflow-y-auto rounded-lg border border-border bg-background/40 p-3 text-sm leading-relaxed text-muted whitespace-pre-wrap">
+            {result.reasoningAvailable ? result.reasoning : "该模型未返回可展示的推理过程。"}
+          </div>
+        ) : (
+          <div className="mt-2 truncate text-sm text-muted">
+            {result.reasoningAvailable ? "已折叠模型返回的推理过程。" : "该模型未返回可展示的推理过程。"}
+          </div>
+        )}
+      </div>
+      <div className="px-4 py-3">
+        <button
+          type="button"
+          onClick={() =>
+            setExpandedAnswers((prev) => ({
+              ...prev,
+              [answerKey]: !prev[answerKey],
+            }))
+          }
+          className="flex w-full items-center justify-between text-left"
+        >
+          <span className="text-xs font-medium text-muted">Answer</span>
+          <span className="text-xs text-primary">{expandedAnswers[answerKey] ? "收起" : "展开"}</span>
+        </button>
+        {expandedAnswers[answerKey] ? (
+          <div
+            className={`mt-2 max-h-96 overflow-y-auto rounded-lg border border-border bg-background/40 p-3 text-sm leading-relaxed whitespace-pre-wrap ${
+              result.status === "error" ? "text-red-400" : "text-foreground"
+            }`}
+          >
+            {result.status === "error" ? result.error : result.content || "（无输出）"}
+          </div>
+        ) : (
+          <div className={`mt-2 truncate text-sm ${result.status === "error" ? "text-red-400" : "text-muted"}`}>
+            {result.status === "error" ? result.error : result.content ? "已折叠模型返回的回答。" : "（无输出）"}
+          </div>
+        )}
+      </div>
+    </div>
+    );
+  };
+
+  const renderRunningModel = (modelId: string) => {
+    const model = MODEL_CONFIGS.find((item) => item.id === modelId);
+    if (!model) return null;
+
+    return (
+      <div key={model.id} className="rounded-xl border border-border bg-card px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className="block h-2 w-2 rounded-full bg-primary animate-pulse" />
+          <div className="text-sm font-medium">{model.name}</div>
+          <div className="text-xs text-muted">运行中...</div>
+        </div>
+        <div className="mt-3 h-2 w-2/3 rounded bg-border animate-pulse" />
+        <div className="mt-2 h-2 w-1/2 rounded bg-border animate-pulse" />
+      </div>
+    );
   };
 
   const handleLogout = async () => {
@@ -400,13 +575,65 @@ export default function ChatPage() {
       <main className="flex-1 flex flex-col min-w-0">
         {/* Header */}
         <div className="px-6 py-3 border-b border-border flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 bg-card border border-border rounded-lg px-3 py-1.5">
-              <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></div>
-              <span className="text-sm font-medium text-foreground">豆包 Seed 2.0 Pro</span>
-              <span className="text-[10px] text-muted bg-background px-1.5 py-0.5 rounded">doubao-seed-2-0-pro-260215</span>
+          <div className="relative flex min-w-0 flex-1 items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              {selectedModels.map((model) => (
+                <button
+                  key={model.id}
+                  onClick={() => toggleModel(model.id)}
+                  disabled={streaming}
+                  className="flex max-w-64 items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 text-left transition-colors hover:border-primary/50 disabled:cursor-not-allowed"
+                  title={model.providerModelId}
+                >
+                  <span className="h-2 w-2 flex-shrink-0 rounded-full bg-green-400" />
+                  <span className="truncate text-sm font-medium text-foreground">{model.shortName}</span>
+                  <span className="truncate rounded bg-background px-1.5 py-0.5 text-[10px] text-muted">{model.providerModelId}</span>
+                </button>
+              ))}
             </div>
-            <span className="text-xs text-muted">火山方舟</span>
+            <button
+              onClick={() => setShowModelMenu((prev) => !prev)}
+              disabled={streaming}
+              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted transition-colors hover:border-primary/50 hover:text-primary disabled:cursor-not-allowed"
+              title="选择模型"
+            >
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                <path d="M9 3v12M3 9h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+            </button>
+            {showModelMenu && (
+              <div className="absolute left-0 top-12 z-20 w-[420px] rounded-xl border border-border bg-card p-2 shadow-2xl">
+                <div className="px-2 py-2 text-xs text-muted">选择 1-{MAX_SELECTED_MODELS} 个模型，用同一个 Prompt 做评测</div>
+                <div className="space-y-1">
+                  {MODEL_CONFIGS.map((model) => {
+                    const checked = selectedModelIds.includes(model.id);
+                    const disabled = !checked && selectedModelIds.length >= MAX_SELECTED_MODELS;
+                    return (
+                      <button
+                        key={model.id}
+                        onClick={() => toggleModel(model.id)}
+                        disabled={disabled}
+                        className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
+                          checked ? "bg-primary/10 text-primary" : "text-foreground hover:bg-card-hover disabled:text-muted/40"
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium">{model.name}</div>
+                          <div className="truncate text-[11px] text-muted">{model.providerModelId}</div>
+                        </div>
+                        <div className={`h-4 w-4 rounded border ${checked ? "border-primary bg-primary" : "border-border"}`}>
+                          {checked && (
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                              <path d="M4 8.2l2.4 2.4L12 5" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
           <span className="text-xs text-muted/50">TokenMesh MVP</span>
         </div>
@@ -428,43 +655,37 @@ export default function ChatPage() {
                   key={msg.id}
                   className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
                 >
-                  <div className={`max-w-[80%] ${msg.role === "user" ? "" : "space-y-1.5"}`}>
+                  <div className={`${msg.role === "user" ? "max-w-[80%]" : "w-full"} ${msg.role === "user" ? "" : "space-y-1.5"}`}>
                     {msg.role === "assistant" && (
                       <div className="flex items-center gap-1.5 px-1">
                         <div className="w-3.5 h-3.5 rounded bg-primary/20 flex items-center justify-center text-[8px] text-primary font-bold">D</div>
-                        <span className="text-[11px] text-muted">豆包 Seed 2.0 Pro</span>
+                        <span className="text-[11px] text-muted">模型评测结果</span>
                       </div>
                     )}
-                    <div
-                      className={`px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
-                        msg.role === "user"
-                          ? "bg-primary text-white rounded-br-md"
-                          : "bg-card border border-border rounded-bl-md"
-                      }`}
-                    >
-                      {msg.content}
-                    </div>
+                    {msg.role === "assistant" && msg.modelResults ? (
+                      <div className="space-y-3">{msg.modelResults.map((result) => renderModelResult(result, msg.id))}</div>
+                    ) : (
+                      <div
+                        className={`px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+                          msg.role === "user"
+                            ? "bg-primary text-white rounded-br-md"
+                            : "bg-card border border-border rounded-bl-md"
+                        }`}
+                      >
+                        {msg.content}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
-              {streamContent && (
+              {streaming && (
                 <div className="flex justify-start">
-                  <div className="max-w-[80%] space-y-1.5">
+                  <div className="w-full space-y-3">
                     <div className="flex items-center gap-1.5 px-1">
-                      <div className="w-3.5 h-3.5 rounded bg-primary/20 flex items-center justify-center text-[8px] text-primary font-bold">D</div>
-                      <span className="text-[11px] text-muted">豆包 Seed 2.0 Pro</span>
+                      <div className="w-3.5 h-3.5 rounded bg-primary/20 flex items-center justify-center text-[8px] text-primary font-bold">R</div>
+                      <span className="text-[11px] text-muted">正在并发调用 {runningModelIds.length} 个模型</span>
                     </div>
-                    <div className="px-4 py-3 rounded-2xl rounded-bl-md bg-card border border-border text-sm leading-relaxed whitespace-pre-wrap">
-                      {streamContent}
-                      <span className="inline-block w-1.5 h-4 bg-primary/60 ml-0.5 animate-pulse"></span>
-                    </div>
-                  </div>
-                </div>
-              )}
-              {streaming && !streamContent && (
-                <div className="flex justify-start">
-                  <div className="px-4 py-3 rounded-2xl rounded-bl-md bg-card border border-border text-sm text-muted">
-                    思考中<span className="animate-pulse">...</span>
+                    {runningModelIds.map(renderRunningModel)}
                   </div>
                 </div>
               )}
@@ -540,6 +761,7 @@ export default function ChatPage() {
               }}
             />
             <button
+              type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={streaming || uploadingFile || attachments.length >= MAX_ATTACHMENT_COUNT}
               className="absolute left-2 bottom-2 p-2 text-muted hover:text-primary disabled:text-muted/30 disabled:cursor-not-allowed transition-colors"
@@ -560,9 +782,11 @@ export default function ChatPage() {
               )}
             </button>
             <button
+              type="button"
               onClick={sendMessage}
               disabled={streaming || uploadingFile || (!input.trim() && attachments.length === 0)}
               className="absolute right-2 bottom-2 p-2 text-primary hover:text-primary-hover disabled:text-muted/30 disabled:cursor-not-allowed transition-colors"
+              title="发送"
             >
               <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
                 <path d="M3 10l14-7-7 14V10H3z" fill="currentColor" />

@@ -1,13 +1,14 @@
 import { NextRequest } from "next/server";
 import { getSession } from "@/lib/auth";
 import { getConversationById, getMessagesByConversationId, addMessage } from "@/lib/db";
+import { ModelConfig, normalizeModelIds } from "@/lib/models";
 
 const ARK_API_KEY = process.env.ARK_API_KEY || "";
 const ARK_BASE_URL = process.env.ARK_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3";
-const ARK_MODEL_ID = process.env.ARK_MODEL_ID || "doubao-seed-2-0-pro-260215";
 const MAX_ATTACHMENT_COUNT = 3;
 const MAX_ATTACHMENT_CHARS = 12000;
-const ARK_FETCH_RETRY_COUNT = 1;
+const ARK_FETCH_RETRY_COUNT = 0;
+const ARK_REQUEST_TIMEOUT_MS = 180000;
 
 type StoredMessage = {
   role: "user" | "assistant" | "system";
@@ -41,15 +42,24 @@ type ArkMessage = {
   content: ArkMessageContent;
 };
 
-type ArkStreamChunk = {
+type ArkCompletionResponse = {
   error?: {
+    code?: string;
+    type?: string;
     message?: string;
   };
   choices?: Array<{
-    delta?: {
+    message?: {
       content?: string;
+      reasoning_content?: string;
+      reasoning?: string;
     };
   }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
 };
 
 function sleep(ms: number) {
@@ -80,6 +90,10 @@ function getNetworkErrorMessage(err: unknown) {
     return "连接火山方舟超时，请稍后重试；如果持续出现，请检查本机网络或代理是否允许 Node.js 访问 ark.cn-beijing.volces.com。";
   }
 
+  if (message.includes("aborted") || message.includes("AbortError") || message.includes("timeout")) {
+    return "模型响应超时，请稍后重试或减少同时评测的模型数量。";
+  }
+
   if (message === "fetch failed" || code) {
     return "无法连接火山方舟服务，请检查本机网络、代理或 ARK_BASE_URL 配置后重试。";
   }
@@ -91,6 +105,8 @@ async function fetchArkCompletion(body: unknown) {
   let lastError: unknown = null;
 
   for (let attempt = 0; attempt <= ARK_FETCH_RETRY_COUNT; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), ARK_REQUEST_TIMEOUT_MS);
     try {
       return await fetch(`${ARK_BASE_URL}/chat/completions`, {
         method: "POST",
@@ -99,16 +115,40 @@ async function fetchArkCompletion(body: unknown) {
           Authorization: `Bearer ${ARK_API_KEY}`,
         },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
     } catch (err) {
       lastError = err;
       if (attempt < ARK_FETCH_RETRY_COUNT) {
         await sleep(600);
       }
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
   throw lastError;
+}
+
+function mapArkError(status: number, errText: string) {
+  let userMessage = "模型服务调用失败";
+  try {
+    const errJson = JSON.parse(errText);
+    const errCode = errJson?.error?.code || errJson?.error?.type || "";
+    if (errCode === "AuthenticationError" || status === 401) {
+      userMessage = "API Key 认证失败，请检查 .env.local 中的 ARK_API_KEY 是否正确";
+    } else if (status === 429) {
+      userMessage = "请求过于频繁，请稍后再试";
+    } else if (status === 404) {
+      userMessage = "模型不存在或未开通，请检查 ARK_MODEL_ID 或模型配置";
+    } else if (errJson?.error?.message) {
+      userMessage = errJson.error.message;
+    }
+  } catch {
+    // ignore parse error
+  }
+
+  return userMessage;
 }
 
 function normalizeAttachments(value: unknown): ChatAttachment[] {
@@ -183,6 +223,86 @@ function buildArkMessageContent(message: string, attachments: ChatAttachment[]):
   ];
 }
 
+async function runModel(model: ModelConfig, arkMessages: ArkMessage[]) {
+  const startedAt = Date.now();
+
+  try {
+    const arkRes = await fetchArkCompletion({
+      model: model.providerModelId,
+      messages: arkMessages,
+      stream: false,
+    });
+
+    const completedAt = Date.now();
+
+    if (!arkRes.ok) {
+      const errText = await arkRes.text();
+      console.error("Ark API error:", model.providerModelId, arkRes.status, errText);
+      return {
+        modelId: model.id,
+        providerModelId: model.providerModelId,
+        modelName: model.name,
+        status: "error" as const,
+        content: "",
+        reasoning: "",
+        reasoningAvailable: false,
+        durationMs: completedAt - startedAt,
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        error: mapArkError(arkRes.status, errText),
+      };
+    }
+
+    const data = (await arkRes.json()) as ArkCompletionResponse;
+    const message = data.choices?.[0]?.message;
+    const content = message?.content || "";
+    const reasoning = message?.reasoning_content || message?.reasoning || "";
+
+    return {
+      modelId: model.id,
+      providerModelId: model.providerModelId,
+      modelName: model.name,
+      status: "success" as const,
+      content,
+      reasoning,
+      reasoningAvailable: Boolean(reasoning),
+      durationMs: completedAt - startedAt,
+      promptTokens: data.usage?.prompt_tokens || 0,
+      completionTokens: data.usage?.completion_tokens || 0,
+      totalTokens: data.usage?.total_tokens || 0,
+      error: "",
+    };
+  } catch (err: unknown) {
+    const completedAt = Date.now();
+    console.error("Chat model error:", model.providerModelId, err);
+    return {
+      modelId: model.id,
+      providerModelId: model.providerModelId,
+      modelName: model.name,
+      status: "error" as const,
+      content: "",
+      reasoning: "",
+      reasoningAvailable: false,
+      durationMs: completedAt - startedAt,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      error: getNetworkErrorMessage(err),
+    };
+  }
+}
+
+function buildAssistantSummary(results: Awaited<ReturnType<typeof runModel>>[]) {
+  return results
+    .map((result) => {
+      const header = `## ${result.modelName}\n耗时：${(result.durationMs / 1000).toFixed(2)}s · Tokens：${result.totalTokens || "未知"}`;
+      if (result.status === "error") return `${header}\n\n调用失败：${result.error}`;
+      return `${header}\n\n${result.content || "（无输出）"}`;
+    })
+    .join("\n\n---\n\n");
+}
+
 export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) {
@@ -202,9 +322,10 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { conversationId, message, attachments } = await req.json();
+  const { conversationId, message, attachments, modelIds } = await req.json();
   const text = typeof message === "string" ? message.trim() : "";
   const normalizedAttachments = normalizeAttachments(attachments);
+  const selectedModels = normalizeModelIds(modelIds);
 
   if (!conversationId || (!text && normalizedAttachments.length === 0)) {
     return new Response(JSON.stringify({ error: "conversationId and message or attachments are required" }), {
@@ -232,112 +353,39 @@ export async function POST(req: NextRequest) {
     content: index === history.length - 1 && m.role === "user" ? modelMessage : m.content,
   }));
 
-  const arkBody = {
-    model: ARK_MODEL_ID,
-    messages: arkMessages,
-    stream: true,
-  };
+  const encoder = new TextEncoder();
 
-  try {
-    const arkRes = await fetchArkCompletion(arkBody);
+  const stream = new ReadableStream({
+    async start(controller) {
+      const results: Awaited<ReturnType<typeof runModel>>[] = [];
 
-    if (!arkRes.ok) {
-      const errText = await arkRes.text();
-      console.error("Ark API error:", arkRes.status, errText);
-
-      let userMessage = "模型服务调用失败";
       try {
-        const errJson = JSON.parse(errText);
-        const errCode = errJson?.error?.code || errJson?.error?.type || "";
-        if (errCode === "AuthenticationError" || arkRes.status === 401) {
-          userMessage = "API Key 认证失败，请检查 .env.local 中的 ARK_API_KEY 是否正确";
-        } else if (arkRes.status === 429) {
-          userMessage = "请求过于频繁，请稍后再试";
-        } else if (arkRes.status === 404) {
-          userMessage = "模型不存在或未开通，请检查 ARK_MODEL_ID 配置";
-        } else if (errJson?.error?.message) {
-          userMessage = errJson.error.message;
-        }
-      } catch {
-        // ignore parse error
+        await Promise.all(
+          selectedModels.map(async (model) => {
+            const result = await runModel(model, arkMessages);
+            results.push(result);
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "result", result })}\n\n`));
+          })
+        );
+
+        addMessage(conversationId, "assistant", buildAssistantSummary(results));
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "done" })}\n\n`));
+      } catch (err: unknown) {
+        console.error("Chat error:", err);
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify({ type: "error", error: getNetworkErrorMessage(err) })}\n\n`)
+        );
+      } finally {
+        controller.close();
       }
+    },
+  });
 
-      return new Response(JSON.stringify({ error: userMessage, detail: errText }), {
-        status: arkRes.status,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    const encoder = new TextEncoder();
-    let fullContent = "";
-
-    const stream = new ReadableStream({
-      async start(controller) {
-        const reader = arkRes.body!.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
-
-            for (const line of lines) {
-              const trimmed = line.trim();
-              if (!trimmed || !trimmed.startsWith("data: ")) continue;
-
-              const data = trimmed.slice(6);
-              if (data === "[DONE]") {
-                addMessage(conversationId, "assistant", fullContent);
-                controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-                continue;
-              }
-
-              try {
-                const parsed = JSON.parse(data) as ArkStreamChunk;
-
-                if (parsed.error) {
-                  console.error("Ark stream error:", parsed.error);
-                  controller.enqueue(
-                    encoder.encode(`data: ${JSON.stringify({ error: parsed.error.message || "Stream error" })}\n\n`)
-                  );
-                  continue;
-                }
-
-                const delta = parsed.choices?.[0]?.delta?.content;
-                if (delta) {
-                  fullContent += delta;
-                  controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: delta })}\n\n`));
-                }
-              } catch {
-                // skip malformed chunks
-              }
-            }
-          }
-        } catch (err) {
-          console.error("Stream read error:", err);
-        } finally {
-          controller.close();
-        }
-      },
-    });
-
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      },
-    });
-  } catch (err: unknown) {
-    console.error("Chat error:", err);
-    return new Response(JSON.stringify({ error: getNetworkErrorMessage(err) }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
 }
