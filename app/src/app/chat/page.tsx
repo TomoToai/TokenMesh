@@ -24,6 +24,41 @@ interface Message {
   created_at: string;
 }
 
+interface ChatAttachment {
+  id: string;
+  kind: "text" | "image";
+  name: string;
+  mimeType: string;
+  size: number;
+  content?: string;
+  dataUrl?: string;
+}
+
+const MAX_ATTACHMENT_COUNT = 3;
+const MAX_FILE_BYTES = 8 * 1024 * 1024;
+const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+
+function formatFileSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function buildLocalDisplayMessage(text: string, attachments: ChatAttachment[]) {
+  if (attachments.length === 0) return text;
+  const fileList = attachments.map((file) => `- ${file.name}`).join("\n");
+  return `${text || "请分析我上传的文件"}\n\n已附加文件：\n${fileList}`;
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("FILE_READ_FAILED"));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function ChatPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
@@ -35,8 +70,19 @@ export default function ChatPage() {
   const [streamContent, setStreamContent] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [uploadingFile, setUploadingFile] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const loadConversations = useCallback(async () => {
+    const res = await fetch("/api/conversations");
+    if (res.ok) {
+      const data = await res.json();
+      setConversations(data.conversations);
+    }
+  }, []);
 
   useEffect(() => {
     fetch("/api/auth/me")
@@ -51,19 +97,11 @@ export default function ChatPage() {
       })
       .catch(() => router.push("/login"))
       .finally(() => setLoading(false));
-  }, []);
+  }, [loadConversations, router]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamContent]);
-
-  const loadConversations = async () => {
-    const res = await fetch("/api/conversations");
-    if (res.ok) {
-      const data = await res.json();
-      setConversations(data.conversations);
-    }
-  };
 
   const loadMessages = useCallback(async (convId: string) => {
     const res = await fetch(`/api/conversations/${convId}`);
@@ -102,29 +140,32 @@ export default function ChatPage() {
 
   const sendMessage = async () => {
     const text = input.trim();
-    if (!text || streaming) return;
+    if ((!text && attachments.length === 0) || streaming || uploadingFile) return;
 
     setError("");
+    const attachmentsToSend = attachments;
+    const title = text ? text.slice(0, 30) : `文件：${attachmentsToSend[0]?.name || "新对话"}`;
 
     if (!activeConvId) {
       const res = await fetch("/api/conversations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: text.slice(0, 30) }),
+        body: JSON.stringify({ title }),
       });
       if (res.ok) {
         const data = await res.json();
         setConversations((prev) => [data.conversation, ...prev]);
         setActiveConvId(data.conversation.id);
-        await doStream(data.conversation.id, text);
+        await doStream(data.conversation.id, text, attachmentsToSend);
       }
     } else {
-      await doStream(activeConvId, text);
+      await doStream(activeConvId, text, attachmentsToSend);
     }
   };
 
-  const doStream = async (convId: string, text: string) => {
+  const doStream = async (convId: string, text: string, files: ChatAttachment[]) => {
     setInput("");
+    setAttachments([]);
     setStreaming(true);
     setStreamContent("");
     setError("");
@@ -132,7 +173,7 @@ export default function ChatPage() {
     const userMsg: Message = {
       id: "temp-" + Date.now(),
       role: "user",
-      content: text,
+      content: buildLocalDisplayMessage(text, files),
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, userMsg]);
@@ -141,7 +182,7 @@ export default function ChatPage() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ conversationId: convId, message: text }),
+        body: JSON.stringify({ conversationId: convId, message: text, attachments: files }),
       });
 
       if (!res.ok) {
@@ -212,6 +253,71 @@ export default function ChatPage() {
       e.preventDefault();
       sendMessage();
     }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (selectedFiles.length === 0) return;
+
+    setError("");
+    setUploadingFile(true);
+
+    const nextAttachments = [...attachments];
+    try {
+      for (const file of selectedFiles) {
+        if (nextAttachments.length >= MAX_ATTACHMENT_COUNT) {
+          setError(`最多同时上传 ${MAX_ATTACHMENT_COUNT} 个文件。`);
+          break;
+        }
+
+        if (file.size > MAX_FILE_BYTES) {
+          setError(`${file.name} 超过 8MB，暂时无法上传。`);
+          continue;
+        }
+
+        if (SUPPORTED_IMAGE_TYPES.has(file.type)) {
+          const dataUrl = await readFileAsDataUrl(file);
+          nextAttachments.push({
+            id: `${file.name}-${file.lastModified}-${Date.now()}`,
+            kind: "image",
+            name: file.name,
+            mimeType: file.type,
+            size: file.size,
+            dataUrl,
+          });
+          continue;
+        }
+
+        const formData = new FormData();
+        formData.append("file", file);
+        const res = await fetch("/api/files/extract", {
+          method: "POST",
+          body: formData,
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          setError(`${file.name}: ${data.error || "文件解析失败"}`);
+          continue;
+        }
+
+        nextAttachments.push({
+          id: `${file.name}-${file.lastModified}-${Date.now()}`,
+          ...data.attachment,
+        });
+      }
+
+      setAttachments(nextAttachments);
+    } catch {
+      setError("文件读取失败，请换一个文件重试。");
+    } finally {
+      setUploadingFile(false);
+    }
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((file) => file.id !== id));
   };
 
   const handleLogout = async () => {
@@ -383,6 +489,41 @@ export default function ChatPage() {
         {/* Input */}
         <div className="px-4 py-4 border-t border-border">
           <div className="max-w-3xl mx-auto relative">
+            {attachments.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-2">
+                {attachments.map((file) => (
+                  <div
+                    key={file.id}
+                    className="flex max-w-full items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted"
+                  >
+                    <span className="flex h-6 w-6 items-center justify-center rounded bg-primary/10 text-[10px] font-semibold text-primary">
+                      {file.kind === "image" ? "IMG" : "TXT"}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="truncate text-foreground max-w-52">{file.name}</div>
+                      <div>{formatFileSize(file.size)}</div>
+                    </div>
+                    <button
+                      onClick={() => removeAttachment(file.id)}
+                      className="ml-1 text-muted hover:text-red-400 transition-colors"
+                      title="移除文件"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                        <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".txt,.md,.csv,.json,.xml,.pdf,image/png,image/jpeg,image/webp"
+              onChange={handleFileChange}
+              className="hidden"
+            />
             <textarea
               ref={inputRef}
               value={input}
@@ -390,7 +531,7 @@ export default function ChatPage() {
               onKeyDown={handleKeyDown}
               placeholder="输入消息，Enter 发送，Shift+Enter 换行..."
               rows={1}
-              className="w-full px-4 py-3 pr-12 bg-card border border-border rounded-xl text-foreground placeholder-muted/50 focus:outline-none focus:border-primary resize-none transition-colors"
+              className="w-full px-12 py-3 pr-12 bg-card border border-border rounded-xl text-foreground placeholder-muted/50 focus:outline-none focus:border-primary resize-none transition-colors"
               style={{ minHeight: "48px", maxHeight: "160px" }}
               onInput={(e) => {
                 const t = e.target as HTMLTextAreaElement;
@@ -399,8 +540,28 @@ export default function ChatPage() {
               }}
             />
             <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={streaming || uploadingFile || attachments.length >= MAX_ATTACHMENT_COUNT}
+              className="absolute left-2 bottom-2 p-2 text-muted hover:text-primary disabled:text-muted/30 disabled:cursor-not-allowed transition-colors"
+              title="上传文件"
+            >
+              {uploadingFile ? (
+                <span className="block h-5 w-5 rounded-full border-2 border-muted/30 border-t-primary animate-spin" />
+              ) : (
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                  <path
+                    d="M6.5 10.5l5.8-5.8a3 3 0 114.2 4.2l-7.1 7.1a4.5 4.5 0 01-6.4-6.4l7.2-7.2"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
+            </button>
+            <button
               onClick={sendMessage}
-              disabled={streaming || !input.trim()}
+              disabled={streaming || uploadingFile || (!input.trim() && attachments.length === 0)}
               className="absolute right-2 bottom-2 p-2 text-primary hover:text-primary-hover disabled:text-muted/30 disabled:cursor-not-allowed transition-colors"
             >
               <svg width="20" height="20" viewBox="0 0 20 20" fill="none">

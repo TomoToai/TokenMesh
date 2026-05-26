@@ -30,19 +30,26 @@ TokenMesh 不仅仅是一个大模型聚合网关——我们是 **Web3 原生**
 - ✅ 用户注册 / 登录 / 退出（JWT + bcrypt 加密）
 - ✅ Chat 对话页面（流式输出，打字效果）
 - ✅ 豆包 Seed 2.0 Pro 模型对接（火山方舟 Ark API）
+- ✅ 本地文件上传（文本 / PDF / 图片）
+- ✅ PDF 文本抽取并作为本轮对话上下文
+- ✅ 图片上传并按多模态消息传给模型
 - ✅ 多轮对话历史管理（新建 / 切换 / 删除）
 - ✅ SQLite 数据持久化
+- ✅ 模型调用错误中文化提示 + 方舟网络超时轻量重试
 - ✅ 暗色主题 UI
+
+> 当前文件上传是 MVP 方案：文件内容仅用于本轮 Chat 上下文，暂不做对象存储、长期文件管理和复杂文档解析流水线。
 
 ## 技术栈
 
 | 层 | 技术 |
 |---|---|
-| 全栈框架 | Next.js 14 (App Router) |
+| 全栈框架 | Next.js 16 (App Router / Turbopack) |
 | 样式 | Tailwind CSS |
 | 数据库 | SQLite (better-sqlite3) |
 | 认证 | JWT (jose) + bcrypt (bcryptjs) |
 | AI API | 火山方舟 Ark API (OpenAI 兼容格式) |
+| 文件解析 | pdf-parse / 浏览器 File API |
 | Web3 支付 | 智能合约 + Wallet Connect（规划中） |
 | 算力共享 | 分布式算力调度引擎（规划中） |
 
@@ -83,6 +90,29 @@ npm run dev
 
 访问 http://localhost:3000
 
+如本机 3000 端口已被占用，也可以指定端口：
+
+```bash
+npm run dev -- -p 3001
+```
+
+## Chat 文件上传能力
+
+当前 Chat 输入框支持上传最多 3 个文件，单文件上限 8MB：
+
+| 类型 | 支持格式 | 处理方式 |
+|------|----------|----------|
+| 文本 | `.txt` / `.md` / `.csv` / `.json` / `.xml` | 前端上传到 `/api/files/extract`，后端抽取文本后作为上下文 |
+| PDF | `.pdf` | 后端使用 `pdf-parse` 抽取文本，清理控制字符后注入本轮 prompt |
+| 图片 | `.png` / `.jpg` / `.jpeg` / `.webp` | 前端转为 data URL，作为多模态消息传给 Ark Chat Completions |
+
+注意：
+
+- 聊天记录中只保存“已附加文件”的摘要，不保存完整文件内容，避免消息列表被大段文本撑爆。
+- PDF 和文本内容会按字符数截断，MVP 先保证简单可用。
+- 图片理解效果取决于当前配置的方舟模型是否支持多模态图片输入。
+- 生产环境后续应迁移到火山引擎 TOS 做对象存储，并增加文件扫描、权限校验和异步解析任务。
+
 ## 项目结构
 
 ```
@@ -107,6 +137,7 @@ TokenMesh/
     │           │   ├── logout/     # 退出
     │           │   └── me/         # 获取当前用户
     │           ├── chat/           # 豆包 Seed 2.0 流式代理
+    │           ├── files/extract/  # 文件文本抽取 API
     │           └── conversations/  # 对话管理
     └── .env.local                  # 环境变量（不入库）
 ```
@@ -120,10 +151,19 @@ TokenMesh/
 | POST | `/api/auth/logout` | 退出登录 |
 | GET | `/api/auth/me` | 获取当前用户 |
 | POST | `/api/chat` | AI 对话（流式 SSE） |
+| POST | `/api/files/extract` | 文件文本抽取（文本 / PDF） |
 | GET | `/api/conversations` | 对话列表 |
 | POST | `/api/conversations` | 创建对话 |
 | GET | `/api/conversations/[id]` | 对话详情 + 消息 |
 | DELETE | `/api/conversations/[id]` | 删除对话 |
+
+## 本地验证
+
+```bash
+cd app
+npm run lint
+npm run build
+```
 
 ## 路线图
 
@@ -131,9 +171,13 @@ TokenMesh/
 - 用户认证系统
 - 豆包 Seed 2.0 对话
 - 对话管理
+- Chat 文件上传（文本 / PDF / 图片）
 
 ### V2 — 增强功能
 - 多模型支持（OpenAI / Claude / Gemini / DeepSeek）
+- 模型选择器
+- 联网搜索（Web Search）
+- 国内支付闭环（10 元固定充值商品）
 - 模型市场页面
 - 智能路由（价格负载均衡 + 模型回退）
 - 供应商路由（排序、过滤、性能阈值）
