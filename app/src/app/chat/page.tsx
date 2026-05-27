@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { DEFAULT_MODEL_ID, MAX_SELECTED_MODELS, MODEL_CONFIGS } from "@/lib/models";
 
 interface User {
@@ -64,16 +66,16 @@ function formatFileSize(size: number) {
 function buildLocalDisplayMessage(text: string, attachments: ChatAttachment[]) {
   if (attachments.length === 0) return text;
   const fileList = attachments.map((file) => `- ${file.name}`).join("\n");
-  return `${text || "请分析我上传的文件"}\n\n已附加文件：\n${fileList}`;
+  return `${text || "Please analyze the uploaded files."}\n\nAttached files:\n${fileList}`;
 }
 
 function buildAssistantSummary(results: ModelRunResult[]) {
   return results
     .map((result) => {
-      const tokens = result.totalTokens ? `${result.totalTokens} tokens` : "Tokens 未返回";
+      const tokens = result.totalTokens ? `${result.totalTokens} tokens` : "Tokens unavailable";
       const header = `${result.modelName} · ${(result.durationMs / 1000).toFixed(2)}s · ${tokens}`;
       if (result.status === "error") return `${header}\n${result.error}`;
-      return `${header}\n${result.content || "（无输出）"}`;
+      return `${header}\n${result.content || "(No output)"}`;
     })
     .join("\n\n---\n\n");
 }
@@ -94,6 +96,57 @@ function readFileAsDataUrl(file: File) {
     reader.onerror = () => reject(new Error("FILE_READ_FAILED"));
     reader.readAsDataURL(file);
   });
+}
+
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        h1: ({ children }) => <h1 className="mb-3 mt-5 text-xl font-semibold text-foreground first:mt-0">{children}</h1>,
+        h2: ({ children }) => <h2 className="mb-3 mt-5 text-lg font-semibold text-foreground first:mt-0">{children}</h2>,
+        h3: ({ children }) => <h3 className="mb-2 mt-4 text-base font-semibold text-foreground first:mt-0">{children}</h3>,
+        h4: ({ children }) => <h4 className="mb-2 mt-4 text-sm font-semibold text-foreground first:mt-0">{children}</h4>,
+        p: ({ children }) => <p className="my-2 leading-7 text-foreground">{children}</p>,
+        strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+        em: ({ children }) => <em className="text-muted">{children}</em>,
+        ul: ({ children }) => <ul className="my-3 list-disc space-y-1 pl-5 text-foreground">{children}</ul>,
+        ol: ({ children }) => <ol className="my-3 list-decimal space-y-1 pl-5 text-foreground">{children}</ol>,
+        li: ({ children }) => <li className="leading-7">{children}</li>,
+        hr: () => <hr className="my-4 border-border" />,
+        blockquote: ({ children }) => (
+          <blockquote className="my-3 border-l-2 border-primary/60 pl-4 text-muted">{children}</blockquote>
+        ),
+        code: ({ children, className }) => {
+          const isBlock = className?.includes("language-");
+          if (isBlock) {
+            return (
+              <code className="block overflow-x-auto rounded-lg border border-border bg-background p-3 text-xs leading-6 text-muted">
+                {children}
+              </code>
+            );
+          }
+          return <code className="rounded bg-background px-1.5 py-0.5 text-[0.85em] text-accent">{children}</code>;
+        },
+        pre: ({ children }) => <pre className="my-3 overflow-x-auto">{children}</pre>,
+        table: ({ children }) => (
+          <div className="my-4 overflow-x-auto rounded-lg border border-border">
+            <table className="w-full border-collapse text-left text-sm">{children}</table>
+          </div>
+        ),
+        thead: ({ children }) => <thead className="bg-background text-foreground">{children}</thead>,
+        th: ({ children }) => <th className="border-b border-border px-3 py-2 font-medium">{children}</th>,
+        td: ({ children }) => <td className="border-t border-border px-3 py-2 text-muted">{children}</td>,
+        a: ({ children, href }) => (
+          <a href={href} target="_blank" rel="noreferrer" className="text-primary hover:text-primary-hover">
+            {children}
+          </a>
+        ),
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
 }
 
 export default function ChatPage() {
@@ -186,7 +239,7 @@ export default function ChatPage() {
     setError("");
     const attachmentsToSend = attachments;
     const modelIdsToSend = selectedModelIds;
-    const title = text ? text.slice(0, 30) : `文件：${attachmentsToSend[0]?.name || "新对话"}`;
+    const title = text ? text.slice(0, 30) : `File: ${attachmentsToSend[0]?.name || "New Chat"}`;
 
     if (!activeConvId) {
       const res = await fetch("/api/conversations", {
@@ -231,7 +284,7 @@ export default function ChatPage() {
         const err = await res.json();
         let msg = err.error || "Request failed";
         if (msg === "ARK_API_KEY not configured") {
-          msg = "ARK_API_KEY 未配置，请在 .env.local 文件中填入你的火山方舟 API Key 后重启服务。获取地址：https://console.volcengine.com/ark";
+          msg = "ARK_API_KEY is not configured. Add your Volcengine Ark API key to .env.local and restart the server.";
         }
         setError(msg);
         setStreaming(false);
@@ -268,7 +321,7 @@ export default function ChatPage() {
           try {
             const parsed = JSON.parse(trimmed.slice(6));
             if (parsed.type === "error") {
-              setError(parsed.error || "模型调用失败");
+              setError(parsed.error || "Model call failed");
               continue;
             }
 
@@ -294,7 +347,7 @@ export default function ChatPage() {
         }
       }
     } catch {
-      setError("网络请求失败，请检查网络连接后重试。");
+      setError("Network request failed. Check your connection and try again.");
     } finally {
       setStreaming(false);
       setRunningModelIds([]);
@@ -321,12 +374,12 @@ export default function ChatPage() {
     try {
       for (const file of selectedFiles) {
         if (nextAttachments.length >= MAX_ATTACHMENT_COUNT) {
-          setError(`最多同时上传 ${MAX_ATTACHMENT_COUNT} 个文件。`);
+          setError(`You can upload up to ${MAX_ATTACHMENT_COUNT} files at once.`);
           break;
         }
 
         if (file.size > MAX_FILE_BYTES) {
-          setError(`${file.name} 超过 8MB，暂时无法上传。`);
+          setError(`${file.name} is larger than 8MB and cannot be uploaded yet.`);
           continue;
         }
 
@@ -352,7 +405,7 @@ export default function ChatPage() {
         const data = await res.json();
 
         if (!res.ok) {
-          setError(`${file.name}: ${data.error || "文件解析失败"}`);
+          setError(`${file.name}: ${data.error || "File parsing failed"}`);
           continue;
         }
 
@@ -364,7 +417,7 @@ export default function ChatPage() {
 
       setAttachments(nextAttachments);
     } catch {
-      setError("文件读取失败，请换一个文件重试。");
+      setError("File read failed. Try another file.");
     } finally {
       setUploadingFile(false);
     }
@@ -404,19 +457,19 @@ export default function ChatPage() {
         <div className="grid grid-cols-4 gap-2 text-right text-[11px] text-muted">
           <div>
             <div className="text-foreground">{formatDuration(result.durationMs)}</div>
-            <div>耗时</div>
+            <div>Latency</div>
           </div>
           <div>
             <div className="text-foreground">{formatTokens(result.promptTokens)}</div>
-            <div title="由模型服务返回的 prompt tokens，不同模型 tokenizer 可能不同">计费输入</div>
+            <div title="Prompt tokens returned by the model provider. Tokenizers may differ across models.">Input</div>
           </div>
           <div>
             <div className="text-foreground">{formatTokens(result.completionTokens)}</div>
-            <div>输出</div>
+            <div>Output</div>
           </div>
           <div>
             <div className="text-foreground">{formatTokens(result.totalTokens)}</div>
-            <div>总计</div>
+            <div>Total</div>
           </div>
         </div>
       </div>
@@ -433,16 +486,16 @@ export default function ChatPage() {
         >
           <span className="text-xs font-medium text-muted">Reasoning</span>
           <span className="text-xs text-primary">
-            {expandedReasoning[reasoningKey] ? "收起" : "展开"}
+            {expandedReasoning[reasoningKey] ? "Collapse" : "Expand"}
           </span>
         </button>
         {expandedReasoning[reasoningKey] ? (
           <div className="mt-2 max-h-80 overflow-y-auto rounded-lg border border-border bg-background/40 p-3 text-sm leading-relaxed text-muted whitespace-pre-wrap">
-            {result.reasoningAvailable ? result.reasoning : "该模型未返回可展示的推理过程。"}
+            {result.reasoningAvailable ? result.reasoning : "This model did not return displayable reasoning."}
           </div>
         ) : (
           <div className="mt-2 truncate text-sm text-muted">
-            {result.reasoningAvailable ? "已折叠模型返回的推理过程。" : "该模型未返回可展示的推理过程。"}
+            {result.reasoningAvailable ? "Reasoning is collapsed." : "This model did not return displayable reasoning."}
           </div>
         )}
       </div>
@@ -458,19 +511,19 @@ export default function ChatPage() {
           className="flex w-full items-center justify-between text-left"
         >
           <span className="text-xs font-medium text-muted">Answer</span>
-          <span className="text-xs text-primary">{expandedAnswers[answerKey] ? "收起" : "展开"}</span>
+          <span className="text-xs text-primary">{expandedAnswers[answerKey] ? "Collapse" : "Expand"}</span>
         </button>
         {expandedAnswers[answerKey] ? (
-          <div
-            className={`mt-2 max-h-96 overflow-y-auto rounded-lg border border-border bg-background/40 p-3 text-sm leading-relaxed whitespace-pre-wrap ${
-              result.status === "error" ? "text-red-400" : "text-foreground"
-            }`}
-          >
-            {result.status === "error" ? result.error : result.content || "（无输出）"}
+          <div className="mt-2 max-h-[28rem] overflow-y-auto rounded-lg border border-border bg-background/30 px-4 py-3 text-sm">
+            {result.status === "error" ? (
+              <div className="leading-7 text-red-400">{result.error}</div>
+            ) : (
+              <MarkdownContent content={result.content || "(No output)"} />
+            )}
           </div>
         ) : (
           <div className={`mt-2 truncate text-sm ${result.status === "error" ? "text-red-400" : "text-muted"}`}>
-            {result.status === "error" ? result.error : result.content ? "已折叠模型返回的回答。" : "（无输出）"}
+            {result.status === "error" ? result.error : result.content ? "Answer is collapsed." : "(No output)"}
           </div>
         )}
       </div>
@@ -487,7 +540,7 @@ export default function ChatPage() {
         <div className="flex items-center gap-2">
           <span className="block h-2 w-2 rounded-full bg-primary animate-pulse" />
           <div className="text-sm font-medium">{model.name}</div>
-          <div className="text-xs text-muted">运行中...</div>
+          <div className="text-xs text-muted">Running...</div>
         </div>
         <div className="mt-3 h-2 w-2/3 rounded bg-border animate-pulse" />
         <div className="mt-2 h-2 w-1/2 rounded bg-border animate-pulse" />
@@ -526,7 +579,7 @@ export default function ChatPage() {
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
             <path d="M8 1v14M1 8h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
           </svg>
-          新对话
+          New Chat
         </button>
 
         <div className="flex-1 overflow-y-auto mt-3 px-3 space-y-1">
@@ -562,7 +615,7 @@ export default function ChatPage() {
               <div className="text-sm font-medium truncate">{user?.name}</div>
               <div className="text-xs text-muted truncate">{user?.email}</div>
             </div>
-            <button onClick={handleLogout} className="text-muted hover:text-red-400 transition-colors" title="退出登录">
+            <button onClick={handleLogout} className="text-muted hover:text-red-400 transition-colors" title="Sign out">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                 <path d="M6 14H3a1 1 0 01-1-1V3a1 1 0 011-1h3M11 11l3-3-3-3M14 8H6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
@@ -595,7 +648,7 @@ export default function ChatPage() {
               onClick={() => setShowModelMenu((prev) => !prev)}
               disabled={streaming}
               className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted transition-colors hover:border-primary/50 hover:text-primary disabled:cursor-not-allowed"
-              title="选择模型"
+              title="Select models"
             >
               <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
                 <path d="M9 3v12M3 9h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
@@ -603,7 +656,7 @@ export default function ChatPage() {
             </button>
             {showModelMenu && (
               <div className="absolute left-0 top-12 z-20 w-[420px] rounded-xl border border-border bg-card p-2 shadow-2xl">
-                <div className="px-2 py-2 text-xs text-muted">选择 1-{MAX_SELECTED_MODELS} 个模型，用同一个 Prompt 做评测</div>
+                <div className="px-2 py-2 text-xs text-muted">Select 1-{MAX_SELECTED_MODELS} models to compare with the same prompt</div>
                 <div className="space-y-1">
                   {MODEL_CONFIGS.map((model) => {
                     const checked = selectedModelIds.includes(model.id);
@@ -643,9 +696,9 @@ export default function ChatPage() {
           {!activeConvId && messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center space-y-4">
               <div className="text-4xl">🤖</div>
-              <h3 className="text-xl font-medium">开始对话</h3>
+              <h3 className="text-xl font-medium">Start a conversation</h3>
               <p className="text-muted text-sm max-w-md">
-                点击左侧「新对话」或直接在下方输入消息，即可与豆包 Seed 2.0 开始对话。
+                Click “New Chat” on the left or type below to start comparing models.
               </p>
             </div>
           ) : (
@@ -659,7 +712,7 @@ export default function ChatPage() {
                     {msg.role === "assistant" && (
                       <div className="flex items-center gap-1.5 px-1">
                         <div className="w-3.5 h-3.5 rounded bg-primary/20 flex items-center justify-center text-[8px] text-primary font-bold">D</div>
-                        <span className="text-[11px] text-muted">模型评测结果</span>
+                        <span className="text-[11px] text-muted">Model comparison result</span>
                       </div>
                     )}
                     {msg.role === "assistant" && msg.modelResults ? (
@@ -683,7 +736,7 @@ export default function ChatPage() {
                   <div className="w-full space-y-3">
                     <div className="flex items-center gap-1.5 px-1">
                       <div className="w-3.5 h-3.5 rounded bg-primary/20 flex items-center justify-center text-[8px] text-primary font-bold">R</div>
-                      <span className="text-[11px] text-muted">正在并发调用 {runningModelIds.length} 个模型</span>
+                      <span className="text-[11px] text-muted">Calling {runningModelIds.length} models in parallel</span>
                     </div>
                     {runningModelIds.map(renderRunningModel)}
                   </div>
@@ -708,8 +761,8 @@ export default function ChatPage() {
         </div>
 
         {/* Input */}
-        <div className="px-4 py-4 border-t border-border">
-          <div className="max-w-3xl mx-auto relative">
+        <div className="border-t border-border px-4 py-3">
+          <div className="mx-auto max-w-3xl">
             {attachments.length > 0 && (
               <div className="mb-2 flex flex-wrap gap-2">
                 {attachments.map((file) => (
@@ -727,7 +780,7 @@ export default function ChatPage() {
                     <button
                       onClick={() => removeAttachment(file.id)}
                       className="ml-1 text-muted hover:text-red-400 transition-colors"
-                      title="移除文件"
+                      title="Remove file"
                     >
                       <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                         <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -745,53 +798,54 @@ export default function ChatPage() {
               onChange={handleFileChange}
               className="hidden"
             />
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="输入消息，Enter 发送，Shift+Enter 换行..."
-              rows={1}
-              className="w-full px-12 py-3 pr-12 bg-card border border-border rounded-xl text-foreground placeholder-muted/50 focus:outline-none focus:border-primary resize-none transition-colors"
-              style={{ minHeight: "48px", maxHeight: "160px" }}
-              onInput={(e) => {
-                const t = e.target as HTMLTextAreaElement;
-                t.style.height = "auto";
-                t.style.height = Math.min(t.scrollHeight, 160) + "px";
-              }}
-            />
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={streaming || uploadingFile || attachments.length >= MAX_ATTACHMENT_COUNT}
-              className="absolute left-2 bottom-2 p-2 text-muted hover:text-primary disabled:text-muted/30 disabled:cursor-not-allowed transition-colors"
-              title="上传文件"
-            >
-              {uploadingFile ? (
-                <span className="block h-5 w-5 rounded-full border-2 border-muted/30 border-t-primary animate-spin" />
-              ) : (
+            <div className="flex items-end gap-2 rounded-xl border border-border bg-card px-2 py-2 transition-colors focus-within:border-primary">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={streaming || uploadingFile || attachments.length >= MAX_ATTACHMENT_COUNT}
+                className="mb-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-card-hover hover:text-primary disabled:text-muted/30 disabled:cursor-not-allowed"
+                title="Upload files"
+              >
+                {uploadingFile ? (
+                  <span className="block h-5 w-5 rounded-full border-2 border-muted/30 border-t-primary animate-spin" />
+                ) : (
+                  <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                    <path
+                      d="M6.5 10.5l5.8-5.8a3 3 0 114.2 4.2l-7.1 7.1a4.5 4.5 0 01-6.4-6.4l7.2-7.2"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                )}
+              </button>
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Message TokenMesh..."
+                rows={1}
+                className="max-h-40 min-h-9 flex-1 resize-none overflow-y-auto bg-transparent px-1 py-2 text-sm leading-5 text-foreground placeholder-muted/50 focus:outline-none"
+                onInput={(e) => {
+                  const t = e.target as HTMLTextAreaElement;
+                  t.style.height = "36px";
+                  t.style.height = Math.min(t.scrollHeight, 160) + "px";
+                }}
+              />
+              <button
+                type="button"
+                onClick={sendMessage}
+                disabled={streaming || uploadingFile || (!input.trim() && attachments.length === 0)}
+                className="mb-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-primary transition-colors hover:bg-card-hover hover:text-primary-hover disabled:text-muted/30 disabled:cursor-not-allowed"
+                title="Send"
+              >
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                  <path
-                    d="M6.5 10.5l5.8-5.8a3 3 0 114.2 4.2l-7.1 7.1a4.5 4.5 0 01-6.4-6.4l7.2-7.2"
-                    stroke="currentColor"
-                    strokeWidth="1.6"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
+                  <path d="M3 10l14-7-7 14V10H3z" fill="currentColor" />
                 </svg>
-              )}
-            </button>
-            <button
-              type="button"
-              onClick={sendMessage}
-              disabled={streaming || uploadingFile || (!input.trim() && attachments.length === 0)}
-              className="absolute right-2 bottom-2 p-2 text-primary hover:text-primary-hover disabled:text-muted/30 disabled:cursor-not-allowed transition-colors"
-              title="发送"
-            >
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                <path d="M3 10l14-7-7 14V10H3z" fill="currentColor" />
-              </svg>
-            </button>
+              </button>
+            </div>
           </div>
         </div>
       </main>

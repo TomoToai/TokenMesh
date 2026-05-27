@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (file.size > MAX_FILE_BYTES) {
-    return Response.json({ error: "文件不能超过 8MB" }, { status: 400 });
+    return Response.json({ error: "File size cannot exceed 8MB" }, { status: 400 });
   }
 
   try {
@@ -67,11 +67,11 @@ export async function POST(req: NextRequest) {
         await parser.destroy();
       }
     } else {
-      return Response.json({ error: "暂不支持该文件格式" }, { status: 400 });
+      return Response.json({ error: "Unsupported file format" }, { status: 400 });
     }
 
     if (!content) {
-      return Response.json({ error: "没有从文件中提取到可用文本" }, { status: 400 });
+      return Response.json({ error: "No usable text could be extracted from this file" }, { status: 400 });
     }
 
     return Response.json({
@@ -85,6 +85,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     console.error("File extract error:", err);
-    return Response.json({ error: "文件解析失败，请换一个文件重试" }, { status: 500 });
+    return Response.json({ error: "File parsing failed. Try another file." }, { status: 500 });
   }
 }

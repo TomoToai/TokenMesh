@@ -47,11 +47,11 @@ export default function RegisterPage() {
             <span className="text-primary">Token</span>
             <span className="text-accent">Mesh</span>
           </Link>
-          <h2 className="mt-6 text-2xl font-semibold">创建新账户</h2>
+          <h2 className="mt-6 text-2xl font-semibold">Create your account</h2>
           <p className="mt-2 text-sm text-muted">
-            已有账户？{" "}
+            Already have an account?{" "}
             <Link href="/login" className="text-primary hover:text-primary-hover">
-              立即登录
+              Sign in
             </Link>
           </p>
         </div>
@@ -64,19 +64,19 @@ export default function RegisterPage() {
           )}
 
           <div>
-            <label className="block text-sm font-medium mb-2">用户名</label>
+            <label className="block text-sm font-medium mb-2">Name</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
               className="w-full px-4 py-3 bg-card border border-border rounded-lg text-foreground placeholder-muted/50 focus:outline-none focus:border-primary transition-colors"
-              placeholder="你的名字"
+              placeholder="Your name"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-2">邮箱</label>
+            <label className="block text-sm font-medium mb-2">Email</label>
             <input
               type="email"
               value={email}
@@ -88,7 +88,7 @@ export default function RegisterPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-2">密码</label>
+            <label className="block text-sm font-medium mb-2">Password</label>
             <input
               type="password"
               value={password}
@@ -96,7 +96,7 @@ export default function RegisterPage() {
               required
               minLength={6}
               className="w-full px-4 py-3 bg-card border border-border rounded-lg text-foreground placeholder-muted/50 focus:outline-none focus:border-primary transition-colors"
-              placeholder="至少6位"
+              placeholder="At least 6 characters"
             />
           </div>
 
@@ -105,7 +105,7 @@ export default function RegisterPage() {
             disabled={loading}
             className="w-full py-3 bg-primary hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
           >
-            {loading ? "注册中..." : "注册"}
+            {loading ? "Creating account..." : "Create Account"}
           </button>
         </form>
       </div>

@@ -46,11 +46,11 @@ export default function LoginPage() {
             <span className="text-primary">Token</span>
             <span className="text-accent">Mesh</span>
           </Link>
-          <h2 className="mt-6 text-2xl font-semibold">登录你的账户</h2>
+          <h2 className="mt-6 text-2xl font-semibold">Sign in to your account</h2>
           <p className="mt-2 text-sm text-muted">
-            还没有账户？{" "}
+            New to TokenMesh?{" "}
             <Link href="/register" className="text-primary hover:text-primary-hover">
-              立即注册
+              Create an account
             </Link>
           </p>
         </div>
@@ -63,7 +63,7 @@ export default function LoginPage() {
           )}
 
           <div>
-            <label className="block text-sm font-medium mb-2">邮箱</label>
+            <label className="block text-sm font-medium mb-2">Email</label>
             <input
               type="email"
               value={email}
@@ -75,7 +75,7 @@ export default function LoginPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-2">密码</label>
+            <label className="block text-sm font-medium mb-2">Password</label>
             <input
               type="password"
               value={password}
@@ -91,7 +91,7 @@ export default function LoginPage() {
             disabled={loading}
             className="w-full py-3 bg-primary hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
           >
-            {loading ? "登录中..." : "登录"}
+            {loading ? "Signing in..." : "Sign In"}
           </button>
         </form>
       </div>

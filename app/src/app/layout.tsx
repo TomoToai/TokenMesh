@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TokenMesh — 大模型聚合平台",
-  description: "One API for Any Model. 统一接口访问全球大模型。",
+  title: "TokenMesh — Web3 Native LLM Gateway",
+  description: "A Web3 native model gateway for global LLM access, wallet payments, and GPU-to-token compute.",
 };
 
 export default function RootLayout({

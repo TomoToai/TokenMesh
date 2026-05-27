@@ -85,27 +85,27 @@ function getErrorCode(err: unknown) {
 }
 
 function getProviderLabel(provider: ModelConfig["provider"]) {
-  return provider === "deepseek" ? "DeepSeek 官方" : "火山方舟";
+  return provider === "deepseek" ? "DeepSeek Official API" : "Volcengine Ark";
 }
 
 function getNetworkErrorMessage(err: unknown, provider?: ModelConfig["provider"]) {
   const message = getErrorMessage(err);
   const code = getErrorCode(err);
-  const providerLabel = provider ? getProviderLabel(provider) : "模型服务";
+  const serviceLabel = provider ? getProviderLabel(provider) : "the model service";
 
   if (code === "UND_ERR_CONNECT_TIMEOUT" || message.includes("Connect Timeout")) {
-    return `连接${providerLabel}超时，请稍后重试；如果持续出现，请检查本机网络或代理是否允许 Node.js 访问模型服务。`;
+    return `Connection to ${serviceLabel} timed out. Try again later, or check whether Node.js can access the model provider.`;
   }
 
   if (message.includes("aborted") || message.includes("AbortError") || message.includes("timeout")) {
-    return "模型响应超时，请稍后重试或减少同时评测的模型数量。";
+    return "The model response timed out. Try again later or compare fewer models at once.";
   }
 
   if (message === "fetch failed" || code) {
-    return `无法连接${providerLabel}，请检查本机网络、代理或模型服务 base URL 配置后重试。`;
+    return `Unable to connect to ${serviceLabel}. Check your network, proxy, or provider base URL configuration.`;
   }
 
-  return "模型服务调用失败，请稍后重试。";
+  return "Model service call failed. Try again later.";
 }
 
 function getProviderConfig(model: ModelConfig) {
@@ -163,16 +163,16 @@ async function fetchProviderCompletion(model: ModelConfig, body: unknown) {
 }
 
 function mapProviderError(model: ModelConfig, status: number, errText: string) {
-  let userMessage = "模型服务调用失败";
+  let userMessage = "Model service call failed";
   try {
     const errJson = JSON.parse(errText);
     const errCode = errJson?.error?.code || errJson?.error?.type || "";
     if (errCode === "AuthenticationError" || status === 401) {
-      userMessage = `API Key 认证失败，请检查 .env.local 中的 ${getProviderConfig(model).apiKeyName} 是否正确`;
+      userMessage = `API key authentication failed. Check ${getProviderConfig(model).apiKeyName} in .env.local.`;
     } else if (status === 429) {
-      userMessage = "请求过于频繁，请稍后再试";
+      userMessage = "Too many requests. Try again later.";
     } else if (status === 404) {
-      userMessage = `模型不存在或未开通，请检查 ${model.providerModelId} 是否已在${getProviderLabel(model.provider)}开通`;
+      userMessage = `Model not found or not enabled. Check whether ${model.providerModelId} is enabled on ${getProviderLabel(model.provider)}.`;
     } else if (errJson?.error?.message) {
       userMessage = errJson.error.message;
     }
@@ -220,7 +220,7 @@ function buildDisplayMessage(message: string, attachments: ChatAttachment[]) {
   if (attachments.length === 0) return message;
 
   const fileList = attachments.map((file) => `- ${file.name}`).join("\n");
-  return `${message || "请分析我上传的文件"}\n\n已附加文件：\n${fileList}`;
+  return `${message || "Please analyze the uploaded files."}\n\nAttached files:\n${fileList}`;
 }
 
 function buildModelMessage(message: string, attachments: ChatAttachment[]) {
@@ -229,13 +229,13 @@ function buildModelMessage(message: string, attachments: ChatAttachment[]) {
   const fileContext = attachments
     .filter((file) => file.kind === "text" && file.content)
     .map((file, index) => {
-      return `文件 ${index + 1}: ${file.name}\n\`\`\`\n${file.content}\n\`\`\``;
+      return `File ${index + 1}: ${file.name}\n\`\`\`\n${file.content}\n\`\`\``;
     })
     .join("\n\n");
 
-  if (!fileContext) return message || "请分析我上传的图片";
+  if (!fileContext) return message || "Please analyze the uploaded images.";
 
-  return `${message || "请分析我上传的文件"}\n\n以下是用户上传的文件内容，请结合这些内容回答：\n\n${fileContext}`;
+  return `${message || "Please analyze the uploaded files."}\n\nThe user uploaded the following file content. Use it as context when answering:\n\n${fileContext}`;
 }
 
 function buildArkMessageContent(message: string, attachments: ChatAttachment[]): ProviderMessageContent {
@@ -265,10 +265,10 @@ function providerContentToText(content: ProviderMessageContent) {
   const imageCount = content.filter((item) => item.type === "image_url").length;
 
   if (imageCount > 0) {
-    textParts.push(`[系统提示：用户上传了 ${imageCount} 张图片，但当前模型暂不支持图片输入。]`);
+    textParts.push(`[System note: The user uploaded ${imageCount} image(s), but the current model does not support image input.]`);
   }
 
-  return textParts.join("\n\n") || "用户上传了图片，但当前模型暂不支持图片输入。";
+  return textParts.join("\n\n") || "The user uploaded image(s), but the current model does not support image input.";
 }
 
 function normalizeMessagesForProvider(model: ModelConfig, messages: ArkMessage[]) {
@@ -336,7 +336,7 @@ async function runModel(model: ModelConfig, arkMessages: ArkMessage[]) {
     console.error("Chat model error:", model.providerModelId, err);
     const errorMessage =
       getErrorMessage(err) === `${getProviderConfig(model).apiKeyName}_MISSING`
-        ? `未配置 ${getProviderConfig(model).apiKeyName}，请在 .env.local 中补充后重启服务。`
+        ? `${getProviderConfig(model).apiKeyName} is not configured. Add it to .env.local and restart the server.`
         : getNetworkErrorMessage(err, model.provider);
     return {
       modelId: model.id,
@@ -358,9 +358,9 @@ async function runModel(model: ModelConfig, arkMessages: ArkMessage[]) {
 function buildAssistantSummary(results: Awaited<ReturnType<typeof runModel>>[]) {
   return results
     .map((result) => {
-      const header = `## ${result.modelName}\n耗时：${(result.durationMs / 1000).toFixed(2)}s · Tokens：${result.totalTokens || "未知"}`;
-      if (result.status === "error") return `${header}\n\n调用失败：${result.error}`;
-      return `${header}\n\n${result.content || "（无输出）"}`;
+      const header = `## ${result.modelName}\nLatency: ${(result.durationMs / 1000).toFixed(2)}s · Tokens: ${result.totalTokens || "Unknown"}`;
+      if (result.status === "error") return `${header}\n\nCall failed: ${result.error}`;
+      return `${header}\n\n${result.content || "(No output)"}`;
     })
     .join("\n\n---\n\n");
 }
@@ -391,7 +391,7 @@ export async function POST(req: NextRequest) {
     return new Response(
       JSON.stringify({
         error: `${missingApiKeys.join(", ")} not configured`,
-        hint: `请在 .env.local 中填入 ${missingApiKeys.join(", ")} 后重启服务。`,
+        hint: `Add ${missingApiKeys.join(", ")} to .env.local and restart the server.`,
       }),
       { status: 500, headers: { "Content-Type": "application/json" } }
     );

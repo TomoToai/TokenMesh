@@ -14,7 +14,7 @@ export const MODEL_CONFIGS: ModelConfig[] = [
     providerModelId: "doubao-seed-2-0-pro-260215",
     name: "Doubao-Seed-2.0-Pro",
     shortName: "Doubao Pro",
-    description: "火山方舟",
+    description: "Volcengine Ark",
   },
   {
     id: "tokenmesh-doubao-seed-2-0-lite-260428",
@@ -22,7 +22,7 @@ export const MODEL_CONFIGS: ModelConfig[] = [
     providerModelId: "doubao-seed-2-0-lite-260428",
     name: "Doubao-Seed-2.0-lite",
     shortName: "Doubao Lite",
-    description: "火山方舟",
+    description: "Volcengine Ark",
   },
   {
     id: "tokenmesh-deepseek-v4-flash",
@@ -30,7 +30,7 @@ export const MODEL_CONFIGS: ModelConfig[] = [
     providerModelId: "deepseek-v4-flash",
     name: "DeepSeek V4 Flash",
     shortName: "DeepSeek Flash",
-    description: "DeepSeek 官方",
+    description: "DeepSeek Official",
   },
   {
     id: "tokenmesh-deepseek-v4-pro",
@@ -38,7 +38,7 @@ export const MODEL_CONFIGS: ModelConfig[] = [
     providerModelId: "deepseek-v4-pro",
     name: "DeepSeek V4 Pro",
     shortName: "DeepSeek Pro",
-    description: "DeepSeek 官方",
+    description: "DeepSeek Official",
   },
 ];
 
