@@ -1,6 +1,6 @@
 export type ModelConfig = {
   id: string;
-  provider: "volcengine";
+  provider: "volcengine" | "deepseek";
   providerModelId: string;
   name: string;
   shortName: string;
@@ -26,11 +26,19 @@ export const MODEL_CONFIGS: ModelConfig[] = [
   },
   {
     id: "tokenmesh-deepseek-v4-flash",
-    provider: "volcengine",
+    provider: "deepseek",
     providerModelId: "deepseek-v4-flash",
     name: "DeepSeek V4 Flash",
     shortName: "DeepSeek Flash",
-    description: "火山方舟",
+    description: "DeepSeek 官方",
+  },
+  {
+    id: "tokenmesh-deepseek-v4-pro",
+    provider: "deepseek",
+    providerModelId: "deepseek-v4-pro",
+    name: "DeepSeek V4 Pro",
+    shortName: "DeepSeek Pro",
+    description: "DeepSeek 官方",
   },
 ];
 

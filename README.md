@@ -49,11 +49,12 @@ Chat 页面顶部提供模型选择器，当前支持从火山方舟模型中选
 
 当前内置模型：
 
-| TokenMesh 模型 ID | 方舟模型 ID | 说明 |
+| TokenMesh 模型 ID | Provider 模型 ID | 说明 |
 |-------------------|-------------|------|
 | `tokenmesh-doubao-seed-2-0-pro-260215` | `doubao-seed-2-0-pro-260215` | 豆包 Seed 2.0 Pro |
 | `tokenmesh-doubao-seed-2-0-lite-260428` | `doubao-seed-2-0-lite-260428` | 豆包 Seed 2.0 lite |
-| `tokenmesh-deepseek-v4-flash` | `deepseek-v4-flash` | DeepSeek V4 Flash |
+| `tokenmesh-deepseek-v4-flash` | `deepseek-v4-flash` | DeepSeek V4 Flash（DeepSeek 官方 API） |
+| `tokenmesh-deepseek-v4-pro` | `deepseek-v4-pro` | DeepSeek V4 Pro（DeepSeek 官方 API） |
 
 评测结果会按模型分卡片展示：
 
@@ -74,7 +75,7 @@ Chat 页面顶部提供模型选择器，当前支持从火山方舟模型中选
 | 样式 | Tailwind CSS |
 | 数据库 | SQLite (better-sqlite3) |
 | 认证 | JWT (jose) + bcrypt (bcryptjs) |
-| AI API | 火山方舟 Ark API (OpenAI 兼容格式) |
+| AI API | 火山方舟 Ark API / DeepSeek 官方 API (OpenAI 兼容格式) |
 | 文件解析 | pdf-parse / 浏览器 File API |
 | Web3 支付 | 智能合约 + Wallet Connect（规划中） |
 | 算力共享 | 分布式算力调度引擎（规划中） |
@@ -103,6 +104,8 @@ cp .env.example .env.local
 ARK_API_KEY=你的API-Key
 ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
 ARK_MODEL_ID=doubao-seed-2-0-pro-260215
+DEEPSEEK_API_KEY=你的DeepSeek-API-Key
+DEEPSEEK_BASE_URL=https://api.deepseek.com
 JWT_SECRET=your-jwt-secret
 ```
 

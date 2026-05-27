@@ -5,10 +5,12 @@ import { ModelConfig, normalizeModelIds } from "@/lib/models";
 
 const ARK_API_KEY = process.env.ARK_API_KEY || "";
 const ARK_BASE_URL = process.env.ARK_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3";
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || "";
+const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
 const MAX_ATTACHMENT_COUNT = 3;
 const MAX_ATTACHMENT_CHARS = 12000;
-const ARK_FETCH_RETRY_COUNT = 0;
-const ARK_REQUEST_TIMEOUT_MS = 180000;
+const PROVIDER_FETCH_RETRY_COUNT = 0;
+const PROVIDER_REQUEST_TIMEOUT_MS = 180000;
 
 type StoredMessage = {
   role: "user" | "assistant" | "system";
@@ -22,7 +24,7 @@ type ChatAttachment = {
   dataUrl?: string;
 };
 
-type ArkMessageContent =
+type ProviderMessageContent =
   | string
   | Array<
       | {
@@ -39,10 +41,10 @@ type ArkMessageContent =
 
 type ArkMessage = {
   role: "user" | "assistant" | "system";
-  content: ArkMessageContent;
+  content: ProviderMessageContent;
 };
 
-type ArkCompletionResponse = {
+type ProviderCompletionResponse = {
   error?: {
     code?: string;
     type?: string;
@@ -82,12 +84,17 @@ function getErrorCode(err: unknown) {
   return typeof causeCode === "string" ? causeCode : "";
 }
 
-function getNetworkErrorMessage(err: unknown) {
+function getProviderLabel(provider: ModelConfig["provider"]) {
+  return provider === "deepseek" ? "DeepSeek 官方" : "火山方舟";
+}
+
+function getNetworkErrorMessage(err: unknown, provider?: ModelConfig["provider"]) {
   const message = getErrorMessage(err);
   const code = getErrorCode(err);
+  const providerLabel = provider ? getProviderLabel(provider) : "模型服务";
 
   if (code === "UND_ERR_CONNECT_TIMEOUT" || message.includes("Connect Timeout")) {
-    return "连接火山方舟超时，请稍后重试；如果持续出现，请检查本机网络或代理是否允许 Node.js 访问 ark.cn-beijing.volces.com。";
+    return `连接${providerLabel}超时，请稍后重试；如果持续出现，请检查本机网络或代理是否允许 Node.js 访问模型服务。`;
   }
 
   if (message.includes("aborted") || message.includes("AbortError") || message.includes("timeout")) {
@@ -95,31 +102,56 @@ function getNetworkErrorMessage(err: unknown) {
   }
 
   if (message === "fetch failed" || code) {
-    return "无法连接火山方舟服务，请检查本机网络、代理或 ARK_BASE_URL 配置后重试。";
+    return `无法连接${providerLabel}，请检查本机网络、代理或模型服务 base URL 配置后重试。`;
   }
 
   return "模型服务调用失败，请稍后重试。";
 }
 
-async function fetchArkCompletion(body: unknown) {
-  let lastError: unknown = null;
+function getProviderConfig(model: ModelConfig) {
+  if (model.provider === "deepseek") {
+    return {
+      apiKey: DEEPSEEK_API_KEY,
+      baseUrl: DEEPSEEK_BASE_URL,
+      apiKeyName: "DEEPSEEK_API_KEY",
+    };
+  }
 
-  for (let attempt = 0; attempt <= ARK_FETCH_RETRY_COUNT; attempt += 1) {
+  return {
+    apiKey: ARK_API_KEY,
+    baseUrl: ARK_BASE_URL,
+    apiKeyName: "ARK_API_KEY",
+  };
+}
+
+function isMissingApiKey(apiKey: string) {
+  return !apiKey || apiKey === "your-ark-api-key-here" || apiKey === "your-deepseek-api-key-here";
+}
+
+async function fetchProviderCompletion(model: ModelConfig, body: unknown) {
+  let lastError: unknown = null;
+  const { apiKey, baseUrl, apiKeyName } = getProviderConfig(model);
+
+  if (isMissingApiKey(apiKey)) {
+    throw new Error(`${apiKeyName}_MISSING`);
+  }
+
+  for (let attempt = 0; attempt <= PROVIDER_FETCH_RETRY_COUNT; attempt += 1) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), ARK_REQUEST_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), PROVIDER_REQUEST_TIMEOUT_MS);
     try {
-      return await fetch(`${ARK_BASE_URL}/chat/completions`, {
+      return await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${ARK_API_KEY}`,
+          Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify(body),
         signal: controller.signal,
       });
     } catch (err) {
       lastError = err;
-      if (attempt < ARK_FETCH_RETRY_COUNT) {
+      if (attempt < PROVIDER_FETCH_RETRY_COUNT) {
         await sleep(600);
       }
     } finally {
@@ -130,17 +162,17 @@ async function fetchArkCompletion(body: unknown) {
   throw lastError;
 }
 
-function mapArkError(status: number, errText: string) {
+function mapProviderError(model: ModelConfig, status: number, errText: string) {
   let userMessage = "模型服务调用失败";
   try {
     const errJson = JSON.parse(errText);
     const errCode = errJson?.error?.code || errJson?.error?.type || "";
     if (errCode === "AuthenticationError" || status === 401) {
-      userMessage = "API Key 认证失败，请检查 .env.local 中的 ARK_API_KEY 是否正确";
+      userMessage = `API Key 认证失败，请检查 .env.local 中的 ${getProviderConfig(model).apiKeyName} 是否正确`;
     } else if (status === 429) {
       userMessage = "请求过于频繁，请稍后再试";
     } else if (status === 404) {
-      userMessage = "模型不存在或未开通，请检查 ARK_MODEL_ID 或模型配置";
+      userMessage = `模型不存在或未开通，请检查 ${model.providerModelId} 是否已在${getProviderLabel(model.provider)}开通`;
     } else if (errJson?.error?.message) {
       userMessage = errJson.error.message;
     }
@@ -206,7 +238,7 @@ function buildModelMessage(message: string, attachments: ChatAttachment[]) {
   return `${message || "请分析我上传的文件"}\n\n以下是用户上传的文件内容，请结合这些内容回答：\n\n${fileContext}`;
 }
 
-function buildArkMessageContent(message: string, attachments: ChatAttachment[]): ArkMessageContent {
+function buildArkMessageContent(message: string, attachments: ChatAttachment[]): ProviderMessageContent {
   const imageAttachments = attachments.filter((file) => file.kind === "image" && file.dataUrl);
   const text = buildModelMessage(message, attachments);
 
@@ -223,21 +255,47 @@ function buildArkMessageContent(message: string, attachments: ChatAttachment[]):
   ];
 }
 
+function providerContentToText(content: ProviderMessageContent) {
+  if (typeof content === "string") return content;
+
+  const textParts = content
+    .filter((item) => item.type === "text")
+    .map((item) => item.text)
+    .filter(Boolean);
+  const imageCount = content.filter((item) => item.type === "image_url").length;
+
+  if (imageCount > 0) {
+    textParts.push(`[系统提示：用户上传了 ${imageCount} 张图片，但当前模型暂不支持图片输入。]`);
+  }
+
+  return textParts.join("\n\n") || "用户上传了图片，但当前模型暂不支持图片输入。";
+}
+
+function normalizeMessagesForProvider(model: ModelConfig, messages: ArkMessage[]) {
+  if (model.provider !== "deepseek") return messages;
+
+  return messages.map((message) => ({
+    ...message,
+    content: providerContentToText(message.content),
+  }));
+}
+
 async function runModel(model: ModelConfig, arkMessages: ArkMessage[]) {
   const startedAt = Date.now();
 
   try {
-    const arkRes = await fetchArkCompletion({
+    const providerMessages = normalizeMessagesForProvider(model, arkMessages);
+    const providerRes = await fetchProviderCompletion(model, {
       model: model.providerModelId,
-      messages: arkMessages,
+      messages: providerMessages,
       stream: false,
     });
 
     const completedAt = Date.now();
 
-    if (!arkRes.ok) {
-      const errText = await arkRes.text();
-      console.error("Ark API error:", model.providerModelId, arkRes.status, errText);
+    if (!providerRes.ok) {
+      const errText = await providerRes.text();
+      console.error("Provider API error:", model.provider, model.providerModelId, providerRes.status, errText);
       return {
         modelId: model.id,
         providerModelId: model.providerModelId,
@@ -250,11 +308,11 @@ async function runModel(model: ModelConfig, arkMessages: ArkMessage[]) {
         promptTokens: 0,
         completionTokens: 0,
         totalTokens: 0,
-        error: mapArkError(arkRes.status, errText),
+        error: mapProviderError(model, providerRes.status, errText),
       };
     }
 
-    const data = (await arkRes.json()) as ArkCompletionResponse;
+    const data = (await providerRes.json()) as ProviderCompletionResponse;
     const message = data.choices?.[0]?.message;
     const content = message?.content || "";
     const reasoning = message?.reasoning_content || message?.reasoning || "";
@@ -276,6 +334,10 @@ async function runModel(model: ModelConfig, arkMessages: ArkMessage[]) {
   } catch (err: unknown) {
     const completedAt = Date.now();
     console.error("Chat model error:", model.providerModelId, err);
+    const errorMessage =
+      getErrorMessage(err) === `${getProviderConfig(model).apiKeyName}_MISSING`
+        ? `未配置 ${getProviderConfig(model).apiKeyName}，请在 .env.local 中补充后重启服务。`
+        : getNetworkErrorMessage(err, model.provider);
     return {
       modelId: model.id,
       providerModelId: model.providerModelId,
@@ -288,7 +350,7 @@ async function runModel(model: ModelConfig, arkMessages: ArkMessage[]) {
       promptTokens: 0,
       completionTokens: 0,
       totalTokens: 0,
-      error: getNetworkErrorMessage(err),
+      error: errorMessage,
     };
   }
 }
@@ -312,20 +374,28 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  if (!ARK_API_KEY || ARK_API_KEY === "your-ark-api-key-here") {
-    return new Response(
-      JSON.stringify({
-        error: "ARK_API_KEY not configured",
-        hint: "请在 .env.local 中填入火山方舟 API Key，获取地址：https://console.volcengine.com/ark",
-      }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
-  }
-
   const { conversationId, message, attachments, modelIds } = await req.json();
   const text = typeof message === "string" ? message.trim() : "";
   const normalizedAttachments = normalizeAttachments(attachments);
   const selectedModels = normalizeModelIds(modelIds);
+
+  const missingApiKeys = Array.from(
+    new Set(
+      selectedModels
+        .map((model) => getProviderConfig(model))
+        .filter(({ apiKey }) => isMissingApiKey(apiKey))
+        .map(({ apiKeyName }) => apiKeyName)
+    )
+  );
+  if (missingApiKeys.length > 0) {
+    return new Response(
+      JSON.stringify({
+        error: `${missingApiKeys.join(", ")} not configured`,
+        hint: `请在 .env.local 中填入 ${missingApiKeys.join(", ")} 后重启服务。`,
+      }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
+  }
 
   if (!conversationId || (!text && normalizedAttachments.length === 0)) {
     return new Response(JSON.stringify({ error: "conversationId and message or attachments are required" }), {
