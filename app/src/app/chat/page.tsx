@@ -98,6 +98,15 @@ function readFileAsDataUrl(file: File) {
   });
 }
 
+function resizeComposer(textarea: HTMLTextAreaElement) {
+  textarea.style.height = "36px";
+  textarea.style.height = textAreaValueIsEmpty(textarea.value) ? "36px" : `${Math.min(textarea.scrollHeight, 160)}px`;
+}
+
+function textAreaValueIsEmpty(value: string) {
+  return value.trim().length === 0;
+}
+
 function MarkdownContent({ content }: { content: string }) {
   return (
     <ReactMarkdown
@@ -166,9 +175,12 @@ export default function ChatPage() {
   const [runningModelIds, setRunningModelIds] = useState<string[]>([]);
   const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
   const [expandedAnswers, setExpandedAnswers] = useState<Record<string, boolean>>({});
+  const [editingConvId, setEditingConvId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const skipRenameBlurRef = useRef(false);
 
   const loadConversations = useCallback(async () => {
     const res = await fetch("/api/conversations");
@@ -196,6 +208,12 @@ export default function ChatPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, runningModelIds]);
+
+  useEffect(() => {
+    if (inputRef.current) {
+      resizeComposer(inputRef.current);
+    }
+  }, [input]);
 
   const loadMessages = useCallback(async (convId: string) => {
     const res = await fetch(`/api/conversations/${convId}`);
@@ -230,6 +248,41 @@ export default function ChatPage() {
         setMessages([]);
       }
     }
+  };
+
+  const startRenamingChat = (conv: Conversation, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setEditingConvId(conv.id);
+    setEditingTitle(conv.title);
+  };
+
+  const cancelRenamingChat = (skipNextBlur = false) => {
+    if (skipNextBlur) {
+      skipRenameBlurRef.current = true;
+    }
+    setEditingConvId(null);
+    setEditingTitle("");
+  };
+
+  const saveRenamingChat = async (conv: Conversation) => {
+    const title = editingTitle.trim().slice(0, 80);
+    if (!title || title === conv.title) {
+      cancelRenamingChat();
+      return;
+    }
+
+    const res = await fetch(`/api/conversations/${conv.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setConversations((prev) => prev.map((item) => (item.id === conv.id ? data.conversation : item)));
+    } else {
+      setError("Rename failed. Try again.");
+    }
+    cancelRenamingChat();
   };
 
   const sendMessage = async () => {
@@ -327,7 +380,9 @@ export default function ChatPage() {
 
             if (parsed.type === "result" && parsed.result) {
               const result = parsed.result as ModelRunResult;
-              currentResults = [...currentResults.filter((item) => item.modelId !== result.modelId), result];
+              currentResults = [...currentResults.filter((item) => item.modelId !== result.modelId), result].sort(
+                (left, right) => modelIds.indexOf(left.modelId) - modelIds.indexOf(right.modelId)
+              );
               setRunningModelIds((prev) => prev.filter((id) => id !== result.modelId));
               setMessages((prev) =>
                 prev.map((msg) =>
@@ -587,13 +642,61 @@ export default function ChatPage() {
             <div
               key={conv.id}
               onClick={() => loadMessages(conv.id)}
+              onDoubleClick={(e) => startRenamingChat(conv, e)}
               className={`group flex items-center justify-between px-3 py-2.5 rounded-lg cursor-pointer text-sm transition-colors ${
                 activeConvId === conv.id
                   ? "bg-primary/10 text-primary"
                   : "hover:bg-card-hover text-muted hover:text-foreground"
               }`}
             >
-              <span className="truncate flex-1">{conv.title}</span>
+              {editingConvId === conv.id ? (
+                <input
+                  autoFocus
+                  className="min-w-0 flex-1 rounded-md border border-primary/40 bg-background px-2 py-1 text-sm text-foreground outline-none"
+                  maxLength={80}
+                  onBlur={() => {
+                    if (skipRenameBlurRef.current) {
+                      skipRenameBlurRef.current = false;
+                      return;
+                    }
+                    void saveRenamingChat(conv);
+                  }}
+                  onChange={(e) => setEditingTitle(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void saveRenamingChat(conv);
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      cancelRenamingChat(true);
+                    }
+                  }}
+                  value={editingTitle}
+                />
+              ) : (
+                <span className="truncate flex-1" onDoubleClick={(e) => startRenamingChat(conv, e)} title="Double click to rename">
+                  {conv.title}
+                </span>
+              )}
+              {editingConvId !== conv.id && (
+                <button
+                  onClick={(e) => startRenamingChat(conv, e)}
+                  className="ml-2 text-muted opacity-60 transition-all hover:text-primary group-hover:opacity-100"
+                  title="Rename chat"
+                >
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <path
+                      d="M2.5 9.8L2 12l2.2-.5 6.6-6.6a1.5 1.5 0 00-2.1-2.1L2.5 9.8z"
+                      stroke="currentColor"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="1.4"
+                    />
+                  </svg>
+                </button>
+              )}
               <button
                 onClick={(e) => deleteChat(conv.id, e)}
                 className="opacity-0 group-hover:opacity-100 ml-2 text-muted hover:text-red-400 transition-all"
@@ -688,7 +791,6 @@ export default function ChatPage() {
               </div>
             )}
           </div>
-          <span className="text-xs text-muted/50">TokenMesh MVP</span>
         </div>
 
         {/* Messages */}
@@ -829,9 +931,7 @@ export default function ChatPage() {
                 rows={1}
                 className="max-h-40 min-h-9 flex-1 resize-none overflow-y-auto bg-transparent px-1 py-2 text-sm leading-5 text-foreground placeholder-muted/50 focus:outline-none"
                 onInput={(e) => {
-                  const t = e.target as HTMLTextAreaElement;
-                  t.style.height = "36px";
-                  t.style.height = Math.min(t.scrollHeight, 160) + "px";
+                  resizeComposer(e.target as HTMLTextAreaElement);
                 }}
               />
               <button

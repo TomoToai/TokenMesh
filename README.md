@@ -29,23 +29,27 @@ TokenMesh 不仅仅是一个大模型聚合网关——我们是 **Web3 原生**
 
 - ✅ 用户注册 / 登录 / 退出（JWT + bcrypt 加密）
 - ✅ Chat 对话页面（流式输出，打字效果）
-- ✅ 豆包 Seed 2.0 Pro 模型对接（火山方舟 Ark API）
+- ✅ 4 个模型接入：Doubao Seed 2.0 Pro / Doubao Seed 2.0 lite / DeepSeek V4 Flash / DeepSeek V4 Pro
+- ✅ 双供应商对接：火山方舟 Ark API + DeepSeek 官方 API
 - ✅ 模型选择器（支持 1-3 个模型使用同一 Prompt 做并行评测）
-- ✅ 模型评测结果展示（耗时、计费输入 Tokens、输出 Tokens、总 Tokens）
+- ✅ 单模型对话与多模型对比模式
+- ✅ 模型评测结果展示（完整请求耗时、计费输入 Tokens、输出 Tokens、总 Tokens）
 - ✅ Reasoning / Answer 折叠展示，便于对比长推理结果
+- ✅ Markdown 渲染优化（标题、列表、表格、代码块、引用等）
 - ✅ 本地文件上传（文本 / PDF / 图片）
 - ✅ PDF 文本抽取并作为本轮对话上下文
 - ✅ 图片上传并按多模态消息传给模型
-- ✅ 多轮对话历史管理（新建 / 切换 / 删除）
-- ✅ SQLite 数据持久化
-- ✅ 模型调用错误中文化提示 + 方舟网络超时轻量重试
+- ✅ 多轮对话历史管理（新建 / 切换 / 删除 / 重命名）
+- ✅ SQLite 数据持久化，并保留多模型对比结果卡片
+- ✅ 单模型错误卡片展示，单个供应商配置异常不阻塞其他模型对比
+- ✅ 模型调用错误中文化提示 + 网络超时处理
 - ✅ 暗色主题 UI
 
 > 当前文件上传是 MVP 方案：文件内容仅用于本轮 Chat 上下文，暂不做对象存储、长期文件管理和复杂文档解析流水线。
 
 ## Chat 模型评测能力
 
-Chat 页面顶部提供模型选择器，当前支持从火山方舟模型中选择 1-3 个模型，用同一个处理后的 Prompt 并行调用并对比输出。
+Chat 页面顶部提供模型选择器，当前支持从火山方舟和 DeepSeek 官方 API 中选择 1-3 个模型，用同一个处理后的 Prompt 并行调用并对比输出。用户可以只选择一个模型进行普通单聊，也可以选择多个模型进入对比模式。
 
 当前内置模型：
 
@@ -58,7 +62,7 @@ Chat 页面顶部提供模型选择器，当前支持从火山方舟模型中选
 
 评测结果会按模型分卡片展示：
 
-- 调用耗时
+- 完整请求耗时（读取完模型响应体后统计）
 - 计费输入 Tokens
 - 输出 Tokens
 - 总 Tokens
@@ -66,6 +70,8 @@ Chat 页面顶部提供模型选择器，当前支持从火山方舟模型中选
 - Answer（默认折叠）
 
 说明：计费输入 Tokens 来自模型服务返回的 `usage.prompt_tokens`。即使 TokenMesh 给多个模型传入同一份处理后的 Prompt，不同模型由于 tokenizer、厂商内部模板和计费口径差异，返回的输入 Tokens 也可能不同。
+
+对比结果会持久化到 SQLite。用户刷新页面或切换历史会话后，仍能看到结构化的模型对比卡片，而不是退化为普通文本。
 
 ## 技术栈
 
@@ -166,7 +172,7 @@ TokenMesh/
     │           │   ├── login/      # 登录
     │           │   ├── logout/     # 退出
     │           │   └── me/         # 获取当前用户
-    │           ├── chat/           # 豆包 Seed 2.0 流式代理
+    │           ├── chat/           # 多模型对话与评测 API
     │           ├── files/extract/  # 文件文本抽取 API
     │           └── conversations/  # 对话管理
     └── .env.local                  # 环境变量（不入库）
@@ -185,6 +191,7 @@ TokenMesh/
 | GET | `/api/conversations` | 对话列表 |
 | POST | `/api/conversations` | 创建对话 |
 | GET | `/api/conversations/[id]` | 对话详情 + 消息 |
+| PATCH | `/api/conversations/[id]` | 重命名对话 |
 | DELETE | `/api/conversations/[id]` | 删除对话 |
 
 ## 本地验证
@@ -199,14 +206,15 @@ npm run build
 
 ### V1 — MVP（当前）
 - 用户认证系统
-- 豆包 Seed 2.0 对话
+- 火山方舟 Ark 与 DeepSeek 官方 API 对接
 - 多模型选择器与并行评测
 - 模型耗时 / Tokens / Reasoning / Answer 展示
-- 对话管理
+- 多模型结果持久化
+- 对话管理（新建 / 切换 / 删除 / 重命名）
 - Chat 文件上传（文本 / PDF / 图片）
 
 ### V2 — 增强功能
-- 多模型支持（OpenAI / Claude / Gemini / DeepSeek）
+- 更多模型供应商支持（OpenAI / Claude / Gemini 等）
 - 联网搜索（Web Search）
 - 国内支付闭环（10 元固定充值商品）
 - 模型市场页面

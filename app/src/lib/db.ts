@@ -23,6 +23,14 @@ type ConversationRow = {
   updated_at: string;
 };
 
+type MessageRow = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  created_at: string;
+  model_results_json?: string | null;
+};
+
 export function getDb(): Database.Database {
   if (!_db) {
     _db = new Database(DB_PATH);
@@ -57,6 +65,7 @@ function initDb(db: Database.Database) {
       conversation_id TEXT NOT NULL,
       role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
       content TEXT NOT NULL,
+      model_results_json TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (conversation_id) REFERENCES conversations(id)
     );
@@ -64,6 +73,25 @@ function initDb(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id);
     CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
   `);
+  ensureMessagesModelResultsColumn(db);
+}
+
+function ensureMessagesModelResultsColumn(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>;
+  const hasModelResults = columns.some((column) => column.name === "model_results_json");
+  if (!hasModelResults) {
+    db.prepare("ALTER TABLE messages ADD COLUMN model_results_json TEXT").run();
+  }
+}
+
+function parseModelResults(value?: string | null) {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function createUser(email: string, password: string, name: string) {
@@ -116,17 +144,44 @@ export function getConversationById(id: string, userId: string) {
   return db.prepare("SELECT id, user_id, title, created_at, updated_at FROM conversations WHERE id = ? AND user_id = ?").get(id, userId) as ConversationRow | undefined;
 }
 
-export function addMessage(conversationId: string, role: string, content: string) {
+export function renameConversation(id: string, userId: string, title: string) {
+  const db = getDb();
+  const conv = getConversationById(id, userId);
+  if (!conv) return null;
+
+  db.prepare("UPDATE conversations SET title = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?").run(
+    title,
+    id,
+    userId
+  );
+  return getConversationById(id, userId);
+}
+
+export function addMessage(conversationId: string, role: string, content: string, modelResults?: unknown[]) {
   const db = getDb();
   const id = uuidv4();
-  db.prepare("INSERT INTO messages (id, conversation_id, role, content) VALUES (?, ?, ?, ?)").run(id, conversationId, role, content);
+  const modelResultsJson = modelResults ? JSON.stringify(modelResults) : null;
+  db.prepare("INSERT INTO messages (id, conversation_id, role, content, model_results_json) VALUES (?, ?, ?, ?, ?)").run(
+    id,
+    conversationId,
+    role,
+    content,
+    modelResultsJson
+  );
   db.prepare("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?").run(conversationId);
-  return { id, conversationId, role, content };
+  return { id, conversationId, role, content, modelResults };
 }
 
 export function getMessagesByConversationId(conversationId: string) {
   const db = getDb();
-  return db.prepare("SELECT id, role, content, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC").all(conversationId);
+  const rows = db
+    .prepare("SELECT id, role, content, created_at, model_results_json FROM messages WHERE conversation_id = ? ORDER BY created_at ASC")
+    .all(conversationId) as MessageRow[];
+
+  return rows.map(({ model_results_json, ...row }) => ({
+    ...row,
+    modelResults: parseModelResults(model_results_json),
+  }));
 }
 
 export function deleteConversation(id: string, userId: string) {

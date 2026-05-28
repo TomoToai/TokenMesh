@@ -291,10 +291,9 @@ async function runModel(model: ModelConfig, arkMessages: ArkMessage[]) {
       stream: false,
     });
 
-    const completedAt = Date.now();
-
     if (!providerRes.ok) {
       const errText = await providerRes.text();
+      const completedAt = Date.now();
       console.error("Provider API error:", model.provider, model.providerModelId, providerRes.status, errText);
       return {
         modelId: model.id,
@@ -313,6 +312,7 @@ async function runModel(model: ModelConfig, arkMessages: ArkMessage[]) {
     }
 
     const data = (await providerRes.json()) as ProviderCompletionResponse;
+    const completedAt = Date.now();
     const message = data.choices?.[0]?.message;
     const content = message?.content || "";
     const reasoning = message?.reasoning_content || message?.reasoning || "";
@@ -379,24 +379,6 @@ export async function POST(req: NextRequest) {
   const normalizedAttachments = normalizeAttachments(attachments);
   const selectedModels = normalizeModelIds(modelIds);
 
-  const missingApiKeys = Array.from(
-    new Set(
-      selectedModels
-        .map((model) => getProviderConfig(model))
-        .filter(({ apiKey }) => isMissingApiKey(apiKey))
-        .map(({ apiKeyName }) => apiKeyName)
-    )
-  );
-  if (missingApiKeys.length > 0) {
-    return new Response(
-      JSON.stringify({
-        error: `${missingApiKeys.join(", ")} not configured`,
-        hint: `Add ${missingApiKeys.join(", ")} to .env.local and restart the server.`,
-      }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
-  }
-
   if (!conversationId || (!text && normalizedAttachments.length === 0)) {
     return new Response(JSON.stringify({ error: "conversationId and message or attachments are required" }), {
       status: 400,
@@ -427,18 +409,21 @@ export async function POST(req: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
-      const results: Awaited<ReturnType<typeof runModel>>[] = [];
+      const resultByModelId = new Map<string, Awaited<ReturnType<typeof runModel>>>();
 
       try {
         await Promise.all(
           selectedModels.map(async (model) => {
             const result = await runModel(model, arkMessages);
-            results.push(result);
+            resultByModelId.set(model.id, result);
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "result", result })}\n\n`));
           })
         );
 
-        addMessage(conversationId, "assistant", buildAssistantSummary(results));
+        const results = selectedModels
+          .map((model) => resultByModelId.get(model.id))
+          .filter((result): result is Awaited<ReturnType<typeof runModel>> => Boolean(result));
+        addMessage(conversationId, "assistant", buildAssistantSummary(results), results);
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "done" })}\n\n`));
       } catch (err: unknown) {
         console.error("Chat error:", err);
