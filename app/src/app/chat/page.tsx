@@ -26,6 +26,7 @@ interface Message {
   content: string;
   created_at: string;
   modelResults?: ModelRunResult[];
+  metadata?: MessageMetadata;
 }
 
 interface ChatAttachment {
@@ -51,6 +52,33 @@ interface ModelRunResult {
   completionTokens: number;
   totalTokens: number;
   error: string;
+}
+
+interface WebSearchSource {
+  index: number;
+  title: string;
+  url: string;
+  siteName?: string;
+  snippet?: string;
+  content?: string;
+  publishTime?: string;
+  fetchedAt?: string;
+}
+
+interface WebSearchMetadata {
+  enabled: true;
+  provider: "volcengine";
+  status?: "running" | "success" | "error";
+  query?: string;
+  resultCount?: number;
+  durationMs?: number;
+  costCny?: number;
+  sources?: WebSearchSource[];
+  error?: string;
+}
+
+interface MessageMetadata {
+  webSearch?: WebSearchMetadata | { enabled: boolean; provider?: string };
 }
 
 const MAX_ATTACHMENT_COUNT = 3;
@@ -87,6 +115,14 @@ function formatDuration(ms: number) {
 
 function formatTokens(value: number) {
   return value ? value.toLocaleString() : "-";
+}
+
+function formatSearchStatus(search?: WebSearchMetadata | { enabled: boolean; provider?: string }) {
+  if (!search?.enabled) return "";
+  if (!("status" in search) || search.status === "running") return "正在联网搜索...";
+  if (search.status === "error") return search.error || "联网搜索失败，本次将直接调用模型。";
+  const duration = search.durationMs ? ` · ${(search.durationMs / 1000).toFixed(2)}s` : "";
+  return `已联网搜索 · ${search.resultCount || 0} 条来源${duration}`;
 }
 
 function readFileAsDataUrl(file: File) {
@@ -171,6 +207,7 @@ export default function ChatPage() {
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [uploadingFile, setUploadingFile] = useState(false);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([DEFAULT_MODEL_ID]);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [runningModelIds, setRunningModelIds] = useState<string[]>([]);
   const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
@@ -292,6 +329,7 @@ export default function ChatPage() {
     setError("");
     const attachmentsToSend = attachments;
     const modelIdsToSend = selectedModelIds;
+    const webSearchToSend = webSearchEnabled;
     const title = text ? text.slice(0, 30) : `File: ${attachmentsToSend[0]?.name || "New Chat"}`;
 
     if (!activeConvId) {
@@ -304,14 +342,20 @@ export default function ChatPage() {
         const data = await res.json();
         setConversations((prev) => [data.conversation, ...prev]);
         setActiveConvId(data.conversation.id);
-        await doStream(data.conversation.id, text, attachmentsToSend, modelIdsToSend);
+        await doStream(data.conversation.id, text, attachmentsToSend, modelIdsToSend, webSearchToSend);
       }
     } else {
-      await doStream(activeConvId, text, attachmentsToSend, modelIdsToSend);
+      await doStream(activeConvId, text, attachmentsToSend, modelIdsToSend, webSearchToSend);
     }
   };
 
-  const doStream = async (convId: string, text: string, files: ChatAttachment[], modelIds: string[]) => {
+  const doStream = async (
+    convId: string,
+    text: string,
+    files: ChatAttachment[],
+    modelIds: string[],
+    enableWebSearch: boolean
+  ) => {
     setInput("");
     setAttachments([]);
     setStreaming(true);
@@ -323,6 +367,12 @@ export default function ChatPage() {
       role: "user",
       content: buildLocalDisplayMessage(text, files),
       created_at: new Date().toISOString(),
+      metadata: {
+        webSearch: {
+          enabled: enableWebSearch,
+          provider: "volcengine",
+        },
+      },
     };
     setMessages((prev) => [...prev, userMsg]);
 
@@ -330,7 +380,13 @@ export default function ChatPage() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ conversationId: convId, message: text, attachments: files, modelIds }),
+        body: JSON.stringify({
+          conversationId: convId,
+          message: text,
+          attachments: files,
+          modelIds,
+          webSearch: { enabled: enableWebSearch },
+        }),
       });
 
       if (!res.ok) {
@@ -351,6 +407,15 @@ export default function ChatPage() {
         content: "",
         created_at: new Date().toISOString(),
         modelResults: [],
+        metadata: enableWebSearch
+          ? {
+              webSearch: {
+                enabled: true,
+                provider: "volcengine",
+                status: "running",
+              },
+            }
+          : undefined,
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
@@ -375,6 +440,46 @@ export default function ChatPage() {
             const parsed = JSON.parse(trimmed.slice(6));
             if (parsed.type === "error") {
               setError(parsed.error || "Model call failed");
+              continue;
+            }
+
+            if (parsed.type === "search_start") {
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === assistantId
+                    ? {
+                        ...msg,
+                        metadata: {
+                          ...msg.metadata,
+                          webSearch: {
+                            enabled: true,
+                            provider: "volcengine",
+                            status: "running",
+                            query: parsed.query,
+                          },
+                        },
+                      }
+                    : msg
+                )
+              );
+              continue;
+            }
+
+            if ((parsed.type === "search_done" || parsed.type === "search_error") && parsed.webSearch) {
+              const nextSearch = parsed.webSearch as WebSearchMetadata;
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === assistantId
+                    ? {
+                        ...msg,
+                        metadata: {
+                          ...msg.metadata,
+                          webSearch: nextSearch,
+                        },
+                      }
+                    : msg
+                )
+              );
               continue;
             }
 
@@ -494,6 +599,23 @@ export default function ChatPage() {
   };
 
   const selectedModels = MODEL_CONFIGS.filter((model) => selectedModelIds.includes(model.id));
+
+  const renderWebSearchPanel = (search?: WebSearchMetadata | { enabled: boolean; provider?: string }) => {
+    if (!search?.enabled) return null;
+    const isError = "status" in search && search.status === "error";
+    if (!isError) return null;
+
+    return (
+      <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="h-2 w-2 flex-shrink-0 rounded-full bg-red-400" />
+            <span className="truncate">{formatSearchStatus(search)}</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const renderModelResult = (result: ModelRunResult, messageId: string) => {
     const reasoningKey = `${messageId}:${result.modelId}`;
@@ -818,7 +940,10 @@ export default function ChatPage() {
                       </div>
                     )}
                     {msg.role === "assistant" && msg.modelResults ? (
-                      <div className="space-y-3">{msg.modelResults.map((result) => renderModelResult(result, msg.id))}</div>
+                      <div className="space-y-3">
+                        {renderWebSearchPanel(msg.metadata?.webSearch)}
+                        {msg.modelResults.map((result) => renderModelResult(result, msg.id))}
+                      </div>
                     ) : (
                       <div
                         className={`px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
@@ -921,6 +1046,24 @@ export default function ChatPage() {
                     />
                   </svg>
                 )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setWebSearchEnabled((prev) => !prev)}
+                disabled={streaming}
+                aria-pressed={webSearchEnabled}
+                className={`mb-0.5 flex h-9 flex-shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                  webSearchEnabled
+                    ? "bg-primary/15 text-primary"
+                    : "text-muted hover:bg-card-hover hover:text-primary"
+                }`}
+                title="Volcengine web search"
+              >
+                <svg width="17" height="17" viewBox="0 0 17 17" fill="none">
+                  <circle cx="8.5" cy="8.5" r="6.4" stroke="currentColor" strokeWidth="1.4" />
+                  <path d="M2.6 8.5h11.8M8.5 2.1c1.6 1.7 2.4 3.8 2.4 6.4s-.8 4.7-2.4 6.4M8.5 2.1C6.9 3.8 6.1 5.9 6.1 8.5s.8 4.7 2.4 6.4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+                <span>Web</span>
               </button>
               <textarea
                 ref={inputRef}

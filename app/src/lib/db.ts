@@ -29,6 +29,7 @@ type MessageRow = {
   content: string;
   created_at: string;
   model_results_json?: string | null;
+  metadata_json?: string | null;
 };
 
 export function getDb(): Database.Database {
@@ -66,6 +67,7 @@ function initDb(db: Database.Database) {
       role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
       content TEXT NOT NULL,
       model_results_json TEXT,
+      metadata_json TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (conversation_id) REFERENCES conversations(id)
     );
@@ -74,6 +76,7 @@ function initDb(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
   `);
   ensureMessagesModelResultsColumn(db);
+  ensureMessagesMetadataColumn(db);
 }
 
 function ensureMessagesModelResultsColumn(db: Database.Database) {
@@ -84,11 +87,29 @@ function ensureMessagesModelResultsColumn(db: Database.Database) {
   }
 }
 
+function ensureMessagesMetadataColumn(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>;
+  const hasMetadata = columns.some((column) => column.name === "metadata_json");
+  if (!hasMetadata) {
+    db.prepare("ALTER TABLE messages ADD COLUMN metadata_json TEXT").run();
+  }
+}
+
 function parseModelResults(value?: string | null) {
   if (!value) return undefined;
   try {
     const parsed = JSON.parse(value);
     return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseMetadata(value?: string | null) {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : undefined;
   } catch {
     return undefined;
   }
@@ -157,30 +178,43 @@ export function renameConversation(id: string, userId: string, title: string) {
   return getConversationById(id, userId);
 }
 
-export function addMessage(conversationId: string, role: string, content: string, modelResults?: unknown[]) {
+export function addMessage(
+  conversationId: string,
+  role: string,
+  content: string,
+  modelResults?: unknown[],
+  metadata?: Record<string, unknown>
+) {
   const db = getDb();
   const id = uuidv4();
   const modelResultsJson = modelResults ? JSON.stringify(modelResults) : null;
-  db.prepare("INSERT INTO messages (id, conversation_id, role, content, model_results_json) VALUES (?, ?, ?, ?, ?)").run(
+  const metadataJson = metadata ? JSON.stringify(metadata) : null;
+  db.prepare(
+    "INSERT INTO messages (id, conversation_id, role, content, model_results_json, metadata_json) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(
     id,
     conversationId,
     role,
     content,
-    modelResultsJson
+    modelResultsJson,
+    metadataJson
   );
   db.prepare("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?").run(conversationId);
-  return { id, conversationId, role, content, modelResults };
+  return { id, conversationId, role, content, modelResults, metadata };
 }
 
 export function getMessagesByConversationId(conversationId: string) {
   const db = getDb();
   const rows = db
-    .prepare("SELECT id, role, content, created_at, model_results_json FROM messages WHERE conversation_id = ? ORDER BY created_at ASC")
+    .prepare(
+      "SELECT id, role, content, created_at, model_results_json, metadata_json FROM messages WHERE conversation_id = ? ORDER BY created_at ASC"
+    )
     .all(conversationId) as MessageRow[];
 
-  return rows.map(({ model_results_json, ...row }) => ({
+  return rows.map(({ model_results_json, metadata_json, ...row }) => ({
     ...row,
     modelResults: parseModelResults(model_results_json),
+    metadata: parseMetadata(metadata_json),
   }));
 }
 

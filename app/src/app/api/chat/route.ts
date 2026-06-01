@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getSession } from "@/lib/auth";
 import { getConversationById, getMessagesByConversationId, addMessage } from "@/lib/db";
 import { ModelConfig, normalizeModelIds } from "@/lib/models";
+import { buildWebSearchContext, getWebSearchMetadata, type WebSearchFailure, type WebSearchResult } from "@/lib/web-search";
 
 const ARK_API_KEY = process.env.ARK_API_KEY || "";
 const ARK_BASE_URL = process.env.ARK_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3";
@@ -15,6 +16,14 @@ const PROVIDER_REQUEST_TIMEOUT_MS = 180000;
 type StoredMessage = {
   role: "user" | "assistant" | "system";
   content: string;
+};
+
+type WebSearchRequest = {
+  enabled?: boolean;
+};
+
+type ToolRequest = {
+  type?: string;
 };
 
 type ChatAttachment = {
@@ -216,6 +225,17 @@ function normalizeAttachments(value: unknown): ChatAttachment[] {
   return items.filter((item): item is ChatAttachment => item !== null);
 }
 
+function normalizeWebSearchEnabled(webSearch: unknown, tools: unknown) {
+  const explicitEnabled =
+    Boolean(webSearch && typeof webSearch === "object" && (webSearch as WebSearchRequest).enabled === true) ||
+    webSearch === true;
+  const toolEnabled =
+    Array.isArray(tools) &&
+    tools.some((tool) => tool && typeof tool === "object" && (tool as ToolRequest).type === "tokenmesh:web_search");
+
+  return explicitEnabled || toolEnabled;
+}
+
 function buildDisplayMessage(message: string, attachments: ChatAttachment[]) {
   if (attachments.length === 0) return message;
 
@@ -223,8 +243,19 @@ function buildDisplayMessage(message: string, attachments: ChatAttachment[]) {
   return `${message || "Please analyze the uploaded files."}\n\nAttached files:\n${fileList}`;
 }
 
-function buildModelMessage(message: string, attachments: ChatAttachment[]) {
-  if (attachments.length === 0) return message;
+function appendWebSearchContext(message: string, webSearchContext: string) {
+  if (!webSearchContext) return message;
+
+  return `${message}
+
+Web search context:
+${webSearchContext}`;
+}
+
+function buildModelMessage(message: string, attachments: ChatAttachment[], webSearchContext = "") {
+  const baseMessage = appendWebSearchContext(message, webSearchContext);
+
+  if (attachments.length === 0) return baseMessage;
 
   const fileContext = attachments
     .filter((file) => file.kind === "text" && file.content)
@@ -233,14 +264,14 @@ function buildModelMessage(message: string, attachments: ChatAttachment[]) {
     })
     .join("\n\n");
 
-  if (!fileContext) return message || "Please analyze the uploaded images.";
+  if (!fileContext) return baseMessage || "Please analyze the uploaded images.";
 
-  return `${message || "Please analyze the uploaded files."}\n\nThe user uploaded the following file content. Use it as context when answering:\n\n${fileContext}`;
+  return `${baseMessage || "Please analyze the uploaded files."}\n\nThe user uploaded the following file content. Use it as context when answering:\n\n${fileContext}`;
 }
 
-function buildArkMessageContent(message: string, attachments: ChatAttachment[]): ProviderMessageContent {
+function buildArkMessageContent(message: string, attachments: ChatAttachment[], webSearchContext = ""): ProviderMessageContent {
   const imageAttachments = attachments.filter((file) => file.kind === "image" && file.dataUrl);
-  const text = buildModelMessage(message, attachments);
+  const text = buildModelMessage(message, attachments, webSearchContext);
 
   if (imageAttachments.length === 0) return text;
 
@@ -374,10 +405,11 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const { conversationId, message, attachments, modelIds } = await req.json();
+  const { conversationId, message, attachments, modelIds, webSearch, tools } = await req.json();
   const text = typeof message === "string" ? message.trim() : "";
   const normalizedAttachments = normalizeAttachments(attachments);
   const selectedModels = normalizeModelIds(modelIds);
+  const webSearchEnabled = normalizeWebSearchEnabled(webSearch, tools);
 
   if (!conversationId || (!text && normalizedAttachments.length === 0)) {
     return new Response(JSON.stringify({ error: "conversationId and message or attachments are required" }), {
@@ -395,23 +427,48 @@ export async function POST(req: NextRequest) {
   }
 
   const displayMessage = buildDisplayMessage(text, normalizedAttachments);
-  const modelMessage = buildArkMessageContent(text, normalizedAttachments);
 
-  addMessage(conversationId, "user", displayMessage);
-
-  const history = getMessagesByConversationId(conversationId) as StoredMessage[];
-  const arkMessages: ArkMessage[] = history.map((m, index) => ({
-    role: m.role,
-    content: index === history.length - 1 && m.role === "user" ? modelMessage : m.content,
-  }));
+  addMessage(conversationId, "user", displayMessage, undefined, {
+    webSearch: {
+      enabled: webSearchEnabled,
+      provider: "volcengine",
+    },
+  });
 
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
     async start(controller) {
       const resultByModelId = new Map<string, Awaited<ReturnType<typeof runModel>>>();
+      let searchMetadata: WebSearchResult | WebSearchFailure | undefined;
 
       try {
+        if (webSearchEnabled) {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ type: "search_start", provider: "volcengine", query: text.slice(0, 100) })}\n\n`
+            )
+          );
+          searchMetadata = await getWebSearchMetadata(text);
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({
+                type: searchMetadata.status === "success" ? "search_done" : "search_error",
+                webSearch: searchMetadata,
+                error: searchMetadata.status === "error" ? searchMetadata.error : undefined,
+              })}\n\n`
+            )
+          );
+        }
+
+        const webSearchContext = searchMetadata ? buildWebSearchContext(searchMetadata) : "";
+        const modelMessage = buildArkMessageContent(text, normalizedAttachments, webSearchContext);
+        const history = getMessagesByConversationId(conversationId) as StoredMessage[];
+        const arkMessages: ArkMessage[] = history.map((m, index) => ({
+          role: m.role,
+          content: index === history.length - 1 && m.role === "user" ? modelMessage : m.content,
+        }));
+
         await Promise.all(
           selectedModels.map(async (model) => {
             const result = await runModel(model, arkMessages);
@@ -423,7 +480,9 @@ export async function POST(req: NextRequest) {
         const results = selectedModels
           .map((model) => resultByModelId.get(model.id))
           .filter((result): result is Awaited<ReturnType<typeof runModel>> => Boolean(result));
-        addMessage(conversationId, "assistant", buildAssistantSummary(results), results);
+        addMessage(conversationId, "assistant", buildAssistantSummary(results), results, {
+          webSearch: searchMetadata,
+        });
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "done" })}\n\n`));
       } catch (err: unknown) {
         console.error("Chat error:", err);

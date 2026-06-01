@@ -39,6 +39,7 @@ TokenMesh 不仅仅是一个大模型聚合网关——我们是 **Web3 原生**
 - ✅ 本地文件上传（文本 / PDF / 图片）
 - ✅ PDF 文本抽取并作为本轮对话上下文
 - ✅ 图片上传并按多模态消息传给模型
+- ✅ 联网搜索开关（火山引擎联网搜索，最多 5 条网页来源，多模型共享同一次搜索上下文）
 - ✅ 多轮对话历史管理（新建 / 切换 / 删除 / 重命名）
 - ✅ SQLite 数据持久化，并保留多模型对比结果卡片
 - ✅ 单模型错误卡片展示，单个供应商配置异常不阻塞其他模型对比
@@ -73,6 +74,19 @@ Chat 页面顶部提供模型选择器，当前支持从火山方舟和 DeepSeek
 
 对比结果会持久化到 SQLite。用户刷新页面或切换历史会话后，仍能看到结构化的模型对比卡片，而不是退化为普通文本。
 
+## 联网搜索能力
+
+Chat 输入框提供“Web”开关，默认关闭。用户开启后，服务端会先调用火山引擎联网搜索，再把最多 5 条网页结果注入给当前选中的模型。多模型对比时只执行一次搜索，Doubao / DeepSeek 等模型共享同一份来源上下文，避免重复搜索成本和延迟。
+
+当前 MVP 采用混合模式：
+
+- 优先使用火山引擎返回的网页正文 `Content`
+- 没有正文时回退到搜索摘要 `Snippet`
+- 来源以 `[1] [2] ...` 编号注入模型，回答中要求保留引用编号
+- 搜索结果来源、耗时、结果数和估算成本会随助手消息持久化
+
+计费口径：MVP 阶段成功联网搜索按每次 ¥0.20 估算；模型 token 成本仍以模型供应商返回的 `usage` 为准。搜索失败不会记录搜索费用，系统会提示失败并继续直接调用模型。
+
 ## 技术栈
 
 | 层 | 技术 |
@@ -82,6 +96,7 @@ Chat 页面顶部提供模型选择器，当前支持从火山方舟和 DeepSeek
 | 数据库 | SQLite (better-sqlite3) |
 | 认证 | JWT (jose) + bcrypt (bcryptjs) |
 | AI API | 火山方舟 Ark API / DeepSeek 官方 API (OpenAI 兼容格式) |
+| 联网搜索 | 火山引擎联网搜索 API |
 | 文件解析 | pdf-parse / 浏览器 File API |
 | Web3 支付 | 智能合约 + Wallet Connect（规划中） |
 | 算力共享 | 分布式算力调度引擎（规划中） |
@@ -112,10 +127,14 @@ ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
 ARK_MODEL_ID=doubao-seed-2-0-pro-260215
 DEEPSEEK_API_KEY=你的DeepSeek-API-Key
 DEEPSEEK_BASE_URL=https://api.deepseek.com
+VOLCENGINE_WEB_SEARCH_API_KEY=你的火山引擎联网搜索API-Key
+VOLCENGINE_WEB_SEARCH_BASE_URL=https://open.feedcoopapi.com/search_api/web_search
 JWT_SECRET=your-jwt-secret
 ```
 
 > 获取 API Key：访问 [火山方舟控制台](https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey) 创建
+>
+> 联网搜索需要单独配置火山引擎联网搜索 API Key。未配置时，开启 Web 搜索会展示明确错误，并自动继续普通模型调用。
 
 ### 3. 启动开发服务器
 
@@ -210,12 +229,13 @@ npm run build
 - 多模型选择器与并行评测
 - 模型耗时 / Tokens / Reasoning / Answer 展示
 - 多模型结果持久化
+- 联网搜索（火山引擎，最多 5 条来源，多模型共享）
 - 对话管理（新建 / 切换 / 删除 / 重命名）
 - Chat 文件上传（文本 / PDF / 图片）
 
 ### V2 — 增强功能
 - 更多模型供应商支持（OpenAI / Claude / Gemini 等）
-- 联网搜索（Web Search）
+- 搜索结果引用增强与成本看板
 - 国内支付闭环（10 元固定充值商品）
 - 模型市场页面
 - 智能路由（价格负载均衡 + 模型回退）
