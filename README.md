@@ -29,7 +29,7 @@ TokenMesh 不仅仅是一个大模型聚合网关——我们是 **Web3 原生**
 
 - ✅ 用户注册 / 登录 / 退出（JWT + bcrypt 加密）
 - ✅ Chat 对话页面（流式输出，打字效果）
-- ✅ 4 个模型接入：Doubao Seed 2.0 Pro / Doubao Seed 2.0 lite / DeepSeek V4 Flash / DeepSeek V4 Pro
+- ✅ 动态模型注册：优先读取火山方舟 Ark Endpoint 与基础模型版本，失败时回退到 16 个内置候选模型，并支持环境变量追加模型 ID
 - ✅ 双供应商对接：火山方舟 Ark API + DeepSeek 官方 API
 - ✅ 模型选择器（支持 1-3 个模型使用同一 Prompt 做并行评测）
 - ✅ 单模型对话与多模型对比模式
@@ -52,12 +52,26 @@ TokenMesh 不仅仅是一个大模型聚合网关——我们是 **Web3 原生**
 
 Chat 页面顶部提供模型选择器，当前支持从火山方舟和 DeepSeek 官方 API 中选择 1-3 个模型，用同一个处理后的 Prompt 并行调用并对比输出。用户可以只选择一个模型进行普通单聊，也可以选择多个模型进入对比模式。
 
-当前内置模型：
+模型列表由 `/api/models` 统一下发：配置 `VOLC_ACCESSKEY` / `VOLC_SECRETKEY` 后，服务端会通过火山方舟管控面 `ListEndpoints` 分页拉取当前项目下的 Ark Endpoint，并通过 `ListFoundationModels` / `ListFoundationModelVersions` 分页拉取可见基础模型版本；若其中某一类接口失败，系统会保留已成功获取的模型并提示错误，不会整体丢回静态列表。未配置 AK/SK 或完全拉不到模型时，回退到内置候选模型，保证 MVP 可用。若火山控制台已开通新的 Chat 模型但尚未进入内置列表，也可以用 `VOLCENGINE_ARK_EXTRA_MODEL_IDS` 追加 Model ID。
+
+当前内置候选模型：
 
 | TokenMesh 模型 ID | Provider 模型 ID | 说明 |
 |-------------------|-------------|------|
 | `tokenmesh-doubao-seed-2-0-pro-260215` | `doubao-seed-2-0-pro-260215` | 豆包 Seed 2.0 Pro |
 | `tokenmesh-doubao-seed-2-0-lite-260428` | `doubao-seed-2-0-lite-260428` | 豆包 Seed 2.0 lite |
+| `tokenmesh-doubao-seed-2-0-mini-260428` | `doubao-seed-2-0-mini-260428` | 豆包 Seed 2.0 mini |
+| `tokenmesh-doubao-seed-2-0-lite-260215` | `doubao-seed-2-0-lite-260215` | 豆包 Seed 2.0 lite 早期版本 |
+| `tokenmesh-doubao-seed-2-0-mini-260215` | `doubao-seed-2-0-mini-260215` | 豆包 Seed 2.0 mini 早期版本 |
+| `tokenmesh-doubao-seed-2-0-code-preview-260215` | `doubao-seed-2-0-code-preview-260215` | 豆包 Seed 2.0 Code Preview |
+| `tokenmesh-doubao-seed-character-251128` | `doubao-seed-character-251128` | 豆包 Character |
+| `tokenmesh-doubao-seed-1-8-251228` | `doubao-seed-1-8-251228` | 豆包 Seed 1.8 |
+| `tokenmesh-doubao-seed-1-6-250615` | `doubao-seed-1-6-250615` | 豆包 Seed 1.6 |
+| `tokenmesh-doubao-seed-1-6-flash-250828` | `doubao-seed-1-6-flash-250828` | 豆包 Seed 1.6 Flash |
+| `tokenmesh-doubao-seed-1-6-flash-250615` | `doubao-seed-1-6-flash-250615` | 豆包 Seed 1.6 Flash 早期版本 |
+| `tokenmesh-doubao-seed-1-6-vision-250815` | `doubao-seed-1-6-vision-250815` | 豆包 Seed 1.6 Vision |
+| `tokenmesh-doubao-1-5-pro-32k-250115` | `doubao-1-5-pro-32k-250115` | 豆包 1.5 Pro 32K |
+| `tokenmesh-doubao-1-5-pro-32k-character-250715` | `doubao-1-5-pro-32k-character-250715` | 豆包 1.5 Pro 32K Character |
 | `tokenmesh-deepseek-v4-flash` | `deepseek-v4-flash` | DeepSeek V4 Flash（DeepSeek 官方 API） |
 | `tokenmesh-deepseek-v4-pro` | `deepseek-v4-pro` | DeepSeek V4 Pro（DeepSeek 官方 API） |
 
@@ -124,7 +138,12 @@ cp .env.example .env.local
 ```env
 ARK_API_KEY=你的API-Key
 ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-ARK_MODEL_ID=doubao-seed-2-0-pro-260215
+VOLC_ACCESSKEY=你的火山引擎AccessKey
+VOLC_SECRETKEY=你的火山引擎SecretKey
+VOLC_REGION=cn-beijing
+VOLCENGINE_ARK_OPENAPI_BASE_URL=https://ark.cn-beijing.volcengineapi.com
+VOLCENGINE_ARK_PROJECT_NAME=default
+VOLCENGINE_ARK_EXTRA_MODEL_IDS=doubao-example-model-id-1,doubao-example-model-id-2
 DEEPSEEK_API_KEY=你的DeepSeek-API-Key
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 VOLCENGINE_WEB_SEARCH_API_KEY=你的火山引擎联网搜索API-Key
@@ -132,7 +151,11 @@ VOLCENGINE_WEB_SEARCH_BASE_URL=https://open.feedcoopapi.com/search_api/web_searc
 JWT_SECRET=your-jwt-secret
 ```
 
-> 获取 API Key：访问 [火山方舟控制台](https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey) 创建
+> 获取 API Key：访问 [火山方舟控制台](https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey) 创建。
+>
+> `ARK_API_KEY` 用于模型调用；`VOLC_ACCESSKEY` / `VOLC_SECRETKEY` 用于火山方舟管控面读取已创建的 Endpoint 和可见基础模型版本，从而动态扩充模型选择器。未配置 AK/SK 时会使用内置候选模型。
+>
+> `VOLCENGINE_ARK_EXTRA_MODEL_IDS` 可选，用英文逗号分隔多个火山 Ark Model ID，适合临时追加已开通但未进入内置列表的新模型。
 >
 > 联网搜索需要单独配置火山引擎联网搜索 API Key。未配置时，开启 Web 搜索会展示明确错误，并自动继续普通模型调用。
 
@@ -179,7 +202,8 @@ TokenMesh/
     │   ├── lib/
     │   │   ├── auth.ts             # JWT 认证
     │   │   ├── db.ts               # SQLite 数据库
-    │   │   └── models.ts           # 模型配置与模型 ID 规范化
+    │   │   ├── models.ts           # 静态候选模型与模型 ID 规范化
+    │   │   └── model-registry.ts   # 动态模型注册：火山 Ark Endpoint / 基础模型版本 + fallback
     │   └── app/
     │       ├── page.tsx            # 首页
     │       ├── login/page.tsx      # 登录页
@@ -205,6 +229,7 @@ TokenMesh/
 | POST | `/api/auth/login` | 用户登录 |
 | POST | `/api/auth/logout` | 退出登录 |
 | GET | `/api/auth/me` | 获取当前用户 |
+| GET | `/api/models` | 获取可选模型列表（火山 Ark Endpoint / 基础模型版本 + fallback） |
 | POST | `/api/chat` | AI 对话（流式 SSE） |
 | POST | `/api/files/extract` | 文件文本抽取（文本 / PDF） |
 | GET | `/api/conversations` | 对话列表 |
@@ -218,6 +243,7 @@ TokenMesh/
 ```bash
 cd app
 npm run lint
+npm run smoke:models
 npm run build
 ```
 
@@ -226,7 +252,7 @@ npm run build
 ### V1 — MVP（当前）
 - 用户认证系统
 - 火山方舟 Ark 与 DeepSeek 官方 API 对接
-- 多模型选择器与并行评测
+- 动态模型注册、模型选择器与并行评测
 - 模型耗时 / Tokens / Reasoning / Answer 展示
 - 多模型结果持久化
 - 联网搜索（火山引擎，最多 5 条来源，多模型共享）

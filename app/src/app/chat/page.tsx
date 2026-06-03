@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { DEFAULT_MODEL_ID, MAX_SELECTED_MODELS, MODEL_CONFIGS } from "@/lib/models";
+import { DEFAULT_MODEL_ID, MAX_SELECTED_MODELS, MODEL_CONFIGS, type ModelConfig } from "@/lib/models";
 
 interface User {
   id: string;
@@ -79,6 +79,15 @@ interface WebSearchMetadata {
 
 interface MessageMetadata {
   webSearch?: WebSearchMetadata | { enabled: boolean; provider?: string };
+}
+
+interface ModelRegistryMetadata {
+  source: "volcengine-openapi" | "static-fallback";
+  modelCount: number;
+  endpointCount?: number;
+  foundationModelCount?: number;
+  fetchedAt: string;
+  error?: string;
 }
 
 const MAX_ATTACHMENT_COUNT = 3;
@@ -206,6 +215,9 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(true);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [modelConfigs, setModelConfigs] = useState<ModelConfig[]>(MODEL_CONFIGS);
+  const [modelRegistry, setModelRegistry] = useState<ModelRegistryMetadata | null>(null);
+  const [loadingModels, setLoadingModels] = useState(false);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([DEFAULT_MODEL_ID]);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
@@ -227,6 +239,36 @@ export default function ChatPage() {
     }
   }, []);
 
+  const loadModels = useCallback(async () => {
+    setLoadingModels(true);
+    try {
+      const res = await fetch("/api/models");
+      if (!res.ok) return;
+
+      const data = (await res.json()) as { models?: ModelConfig[]; metadata?: ModelRegistryMetadata };
+      if (Array.isArray(data.models) && data.models.length > 0) {
+        setModelConfigs(data.models);
+        setSelectedModelIds((prev) => {
+          const availableIds = new Set(data.models?.map((model) => model.id) || []);
+          const next = prev.filter((id) => availableIds.has(id)).slice(0, MAX_SELECTED_MODELS);
+          return next.length > 0 ? next : [data.models?.[0]?.id || DEFAULT_MODEL_ID];
+        });
+      }
+      if (data.metadata) {
+        setModelRegistry(data.metadata);
+      }
+    } catch {
+      setModelRegistry({
+        source: "static-fallback",
+        modelCount: MODEL_CONFIGS.length,
+        fetchedAt: new Date().toISOString(),
+        error: "Model registry unavailable; using static model candidates.",
+      });
+    } finally {
+      setLoadingModels(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetch("/api/auth/me")
       .then((r) => (r.ok ? r.json() : null))
@@ -234,13 +276,14 @@ export default function ChatPage() {
         if (data?.user) {
           setUser(data.user);
           loadConversations();
+          loadModels();
         } else {
           router.push("/login");
         }
       })
       .catch(() => router.push("/login"))
       .finally(() => setLoading(false));
-  }, [loadConversations, router]);
+  }, [loadConversations, loadModels, router]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -598,7 +641,7 @@ export default function ChatPage() {
     setShowModelMenu(false);
   };
 
-  const selectedModels = MODEL_CONFIGS.filter((model) => selectedModelIds.includes(model.id));
+  const selectedModels = modelConfigs.filter((model) => selectedModelIds.includes(model.id));
 
   const renderWebSearchPanel = (search?: WebSearchMetadata | { enabled: boolean; provider?: string }) => {
     if (!search?.enabled) return null;
@@ -709,7 +752,7 @@ export default function ChatPage() {
   };
 
   const renderRunningModel = (modelId: string) => {
-    const model = MODEL_CONFIGS.find((item) => item.id === modelId);
+    const model = modelConfigs.find((item) => item.id === modelId);
     if (!model) return null;
 
     return (
@@ -881,9 +924,19 @@ export default function ChatPage() {
             </button>
             {showModelMenu && (
               <div className="absolute left-0 top-12 z-20 w-[420px] rounded-xl border border-border bg-card p-2 shadow-2xl">
-                <div className="px-2 py-2 text-xs text-muted">Select 1-{MAX_SELECTED_MODELS} models to compare with the same prompt</div>
+                <div className="px-2 py-2 text-xs text-muted">
+                  <div>Select 1-{MAX_SELECTED_MODELS} models to compare with the same prompt</div>
+                  <div className="mt-1 truncate">
+                    {loadingModels
+                      ? "Loading model registry..."
+                      : modelRegistry?.source === "volcengine-openapi"
+                        ? `Volcengine registry · ${modelRegistry.modelCount} models · ${modelRegistry.endpointCount || 0} endpoints · ${modelRegistry.foundationModelCount || 0} base versions`
+                        : `Static candidates · ${modelConfigs.length} models`}
+                  </div>
+                  {modelRegistry?.error && <div className="mt-1 truncate text-amber-300">{modelRegistry.error}</div>}
+                </div>
                 <div className="space-y-1">
-                  {MODEL_CONFIGS.map((model) => {
+                  {modelConfigs.map((model) => {
                     const checked = selectedModelIds.includes(model.id);
                     const disabled = !checked && selectedModelIds.length >= MAX_SELECTED_MODELS;
                     return (
@@ -898,6 +951,12 @@ export default function ChatPage() {
                         <div className="min-w-0">
                           <div className="truncate text-sm font-medium">{model.name}</div>
                           <div className="truncate text-[11px] text-muted">{model.providerModelId}</div>
+                          <div className="truncate text-[10px] text-muted/80">
+                            {model.provider === "volcengine" ? "Volcengine Ark" : "DeepSeek Official"}
+                            {model.source === "volcengine-endpoint" ? " · Endpoint" : ""}
+                            {model.source === "volcengine-foundation" ? " · Base model" : ""}
+                            {model.source === "env" ? " · Configured" : ""}
+                          </div>
                         </div>
                         <div className={`h-4 w-4 rounded border ${checked ? "border-primary bg-primary" : "border-border"}`}>
                           {checked && (

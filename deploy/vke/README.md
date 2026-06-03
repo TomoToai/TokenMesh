@@ -55,9 +55,21 @@ cp deploy/vke/secret.example.yaml deploy/vke/secret.yaml
 Edit `deploy/vke/secret.yaml` and fill:
 
 - `ARK_API_KEY`
+- `VOLC_ACCESSKEY`
+- `VOLC_SECRETKEY`
+- `VOLC_REGION`
+- `VOLCENGINE_ARK_OPENAPI_BASE_URL`
+- `VOLCENGINE_ARK_PROJECT_NAME`
+- `VOLCENGINE_ARK_EXTRA_MODEL_IDS` (optional, comma-separated Ark model IDs)
 - `DEEPSEEK_API_KEY`
 - `VOLCENGINE_WEB_SEARCH_API_KEY`
 - `JWT_SECRET`
+
+`ARK_API_KEY` is used for Ark model inference. `VOLC_ACCESSKEY` and
+`VOLC_SECRETKEY` are used by `/api/models` to call the Volcengine Ark OpenAPI
+control plane and load available endpoints plus foundation model versions in
+the configured project. The registry reads paginated results and keeps partial
+successes if either endpoint or foundation-model discovery fails.
 
 Then apply it:
 

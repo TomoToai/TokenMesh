@@ -36,3 +36,6 @@ deploy/vke/secret.yaml
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local smoke-test scratch
+app/.tokenmesh-smoke/

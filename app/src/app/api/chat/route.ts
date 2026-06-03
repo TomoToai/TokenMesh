@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getSession } from "@/lib/auth";
 import { getConversationById, getMessagesByConversationId, addMessage } from "@/lib/db";
 import { ModelConfig, normalizeModelIds } from "@/lib/models";
+import { getAvailableModelConfigs } from "@/lib/model-registry";
 import { buildWebSearchContext, getWebSearchMetadata, type WebSearchFailure, type WebSearchResult } from "@/lib/web-search";
 
 const ARK_API_KEY = process.env.ARK_API_KEY || "";
@@ -408,7 +409,8 @@ export async function POST(req: NextRequest) {
   const { conversationId, message, attachments, modelIds, webSearch, tools } = await req.json();
   const text = typeof message === "string" ? message.trim() : "";
   const normalizedAttachments = normalizeAttachments(attachments);
-  const selectedModels = normalizeModelIds(modelIds);
+  const availableModels = await getAvailableModelConfigs();
+  const selectedModels = normalizeModelIds(modelIds, availableModels);
   const webSearchEnabled = normalizeWebSearchEnabled(webSearch, tools);
 
   if (!conversationId || (!text && normalizedAttachments.length === 0)) {

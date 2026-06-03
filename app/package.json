@@ -6,9 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "smoke:models": "node --no-warnings scripts/smoke-model-registry.mjs"
   },
   "dependencies": {
+    "@volcengine/openapi": "^1.36.2",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.10.0",
     "jose": "^6.2.3",
