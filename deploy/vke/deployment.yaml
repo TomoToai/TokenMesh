@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tokenmesh-web
+  namespace: tokenmesh
+  labels:
+    app: tokenmesh-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tokenmesh-web
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: tokenmesh-web
+    spec:
+      imagePullSecrets:
+        - name: tokenmesh-cr-auth
+      containers:
+        - name: tokenmesh-web
+          image: limengtao-cr-demo-cn-beijing.cr.volces.com/limengtao-codex/limengtao-codex:REPLACE_WITH_TAG
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3001
+          env:
+            - name: PORT
+              value: "3001"
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            - name: DATABASE_PATH
+              value: "/app/data/tokenmesh.db"
+          envFrom:
+            - secretRef:
+                name: tokenmesh-secrets
+          volumeMounts:
+            - name: tokenmesh-data
+              mountPath: /app/data
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: tokenmesh-data
+          persistentVolumeClaim:
+            claimName: tokenmesh-data

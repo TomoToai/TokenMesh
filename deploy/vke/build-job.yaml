@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tokenmesh-image-build
+  namespace: tokenmesh
+  labels:
+    app: tokenmesh-image-build
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: tokenmesh-image-build
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:v1.24.0-debug
+          imagePullPolicy: IfNotPresent
+          args:
+            - --context=git://github.com/TomoToai/TokenMesh.git#refs/heads/main
+            - --context-sub-path=app
+            - --dockerfile=Dockerfile
+            - --destination=limengtao-cr-demo-cn-beijing.cr.volces.com/limengtao-codex/limengtao-codex:REPLACE_WITH_TAG
+            - --build-arg=NODE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/hiclaw-worker:v1.1.0
+            - --build-arg=NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
+            - --single-snapshot
+          volumeMounts:
+            - name: docker-config
+              mountPath: /kaniko/.docker
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+      volumes:
+        - name: docker-config
+          secret:
+            secretName: tokenmesh-cr-auth
+            items:
+              - key: .dockerconfigjson
+                path: config.json

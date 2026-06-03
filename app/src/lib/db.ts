@@ -3,7 +3,7 @@ import path from "path";
 import bcrypt from "bcryptjs";
 import { v4 as uuidv4 } from "uuid";
 
-const DB_PATH = path.join(process.cwd(), "tokenmesh.db");
+const DB_PATH = process.env.DATABASE_PATH || path.join(process.cwd(), "tokenmesh.db");
 
 let _db: Database.Database | null = null;
 
