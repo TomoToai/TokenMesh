@@ -38,4 +38,3 @@ deploy/vke/secret.yaml
 next-env.d.ts
 
 # local smoke-test scratch
-app/.tokenmesh-smoke/
