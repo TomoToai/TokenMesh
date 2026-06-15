@@ -62,5 +62,6 @@ spec:
               memory: 1Gi
       volumes:
         - name: tokenmesh-data
-          persistentVolumeClaim:
-            claimName: tokenmesh-data
+          hostPath:
+            path: /var/lib/tokenmesh/data
+            type: DirectoryOrCreate
