@@ -7,6 +7,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { DEFAULT_MODEL_ID, MAX_SELECTED_MODELS, MODEL_CONFIGS } from "@/lib/models";
 
+type ModelFilter = "all" | "recommended" | "doubao" | "ark-third-party" | "deepseek-official";
+
 interface User {
   id: string;
   email: string;
@@ -85,6 +87,22 @@ const MAX_ATTACHMENT_COUNT = 3;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
+const RECOMMENDED_MODEL_IDS = new Set([
+  "tokenmesh-doubao-seed-2-0-pro-260215",
+  "tokenmesh-doubao-seed-2-0-lite-260428",
+  "tokenmesh-glm-4-7-251222",
+  "tokenmesh-deepseek-v4-pro-260425-ark",
+  "tokenmesh-deepseek-v4-pro",
+]);
+
+const MODEL_FILTERS: Array<{ id: ModelFilter; label: string }> = [
+  { id: "all", label: "全部" },
+  { id: "recommended", label: "推荐" },
+  { id: "doubao", label: "豆包" },
+  { id: "ark-third-party", label: "方舟第三方" },
+  { id: "deepseek-official", label: "DeepSeek 官方" },
+];
+
 function formatFileSize(size: number) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
@@ -123,6 +141,67 @@ function formatSearchStatus(search?: WebSearchMetadata | { enabled: boolean; pro
   if (search.status === "error") return search.error || "联网搜索失败，本次将直接调用模型。";
   const duration = search.durationMs ? ` · ${(search.durationMs / 1000).toFixed(2)}s` : "";
   return `已联网搜索 · ${search.resultCount || 0} 条来源${duration}`;
+}
+
+function getModelVendorLabel(model: (typeof MODEL_CONFIGS)[number]) {
+  if (model.provider === "deepseek") return "DeepSeek 官方";
+  if (model.providerModelId.startsWith("glm-")) return "智谱 GLM · 方舟";
+  if (model.providerModelId.startsWith("deepseek-")) return "DeepSeek · 方舟";
+  return "豆包 · 方舟";
+}
+
+function getModelCapabilityTags(model: (typeof MODEL_CONFIGS)[number]) {
+  const id = model.providerModelId.toLowerCase();
+  const tags: string[] = [];
+
+  if (id.includes("vision")) tags.push("视觉");
+  if (id.includes("code")) tags.push("代码");
+  if (id.includes("flash") || id.includes("lite") || id.includes("mini")) tags.push("轻量");
+  if (id.includes("pro")) tags.push("Pro");
+  if (id.includes("glm")) tags.push("智谱");
+  if (id.includes("deepseek")) tags.push("DeepSeek");
+  if (id.includes("32k")) tags.push("32K");
+
+  return tags.slice(0, 3);
+}
+
+function matchesModelFilter(model: (typeof MODEL_CONFIGS)[number], filter: ModelFilter) {
+  if (filter === "all") return true;
+  if (filter === "recommended") return RECOMMENDED_MODEL_IDS.has(model.id);
+  if (filter === "doubao") return model.provider === "volcengine" && model.providerModelId.startsWith("doubao");
+  if (filter === "ark-third-party") return model.provider === "volcengine" && !model.providerModelId.startsWith("doubao");
+  return model.provider === "deepseek";
+}
+
+function getGroupedModels(models: typeof MODEL_CONFIGS) {
+  const groups = [
+    {
+      id: "recommended",
+      title: "推荐模型",
+      description: "适合优先对比的高频模型",
+      models: models.filter((model) => RECOMMENDED_MODEL_IDS.has(model.id)),
+    },
+    {
+      id: "doubao",
+      title: "火山方舟 · 豆包",
+      description: "豆包文本、代码、视觉和轻量模型",
+      models: models.filter((model) => model.provider === "volcengine" && model.providerModelId.startsWith("doubao")),
+    },
+    {
+      id: "ark-third-party",
+      title: "火山方舟 · 第三方模型",
+      description: "方舟托管的 GLM 与 DeepSeek 等模型",
+      models: models.filter((model) => model.provider === "volcengine" && !model.providerModelId.startsWith("doubao")),
+    },
+    {
+      id: "deepseek-official",
+      title: "DeepSeek 官方 API",
+      description: "直连 DeepSeek 官方接口",
+      models: models.filter((model) => model.provider === "deepseek"),
+    },
+  ];
+
+  return groups.filter((group) => group.models.length > 0);
 }
 
 function readFileAsDataUrl(file: File) {
@@ -209,6 +288,8 @@ export default function ChatPage() {
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([DEFAULT_MODEL_ID]);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
+  const [modelSearch, setModelSearch] = useState("");
+  const [modelFilter, setModelFilter] = useState<ModelFilter>("all");
   const [runningModelIds, setRunningModelIds] = useState<string[]>([]);
   const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
   const [expandedAnswers, setExpandedAnswers] = useState<Record<string, boolean>>({});
@@ -595,10 +676,25 @@ export default function ChatPage() {
       if (prev.length >= MAX_SELECTED_MODELS) return prev;
       return [...prev, modelId];
     });
-    setShowModelMenu(false);
   };
 
   const selectedModels = MODEL_CONFIGS.filter((model) => selectedModelIds.includes(model.id));
+  const normalizedModelSearch = modelSearch.trim().toLowerCase();
+  const visibleModels = MODEL_CONFIGS.filter((model) => {
+    const searchTarget = [
+      model.name,
+      model.shortName,
+      model.providerModelId,
+      model.description,
+      getModelVendorLabel(model),
+      getModelCapabilityTags(model).join(" "),
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    return matchesModelFilter(model, modelFilter) && (!normalizedModelSearch || searchTarget.includes(normalizedModelSearch));
+  });
+  const groupedModels = getGroupedModels(visibleModels);
 
   const renderWebSearchPanel = (search?: WebSearchMetadata | { enabled: boolean; provider?: string }) => {
     if (!search?.enabled) return null;
@@ -880,41 +976,164 @@ export default function ChatPage() {
               </svg>
             </button>
             {showModelMenu && (
-              <div className="absolute left-0 top-12 z-20 w-[420px] rounded-xl border border-border bg-card p-2 shadow-2xl">
-                <div className="px-2 py-2 text-xs text-muted">
-                  <div>Select 1-{MAX_SELECTED_MODELS} models to compare with the same prompt</div>
-                  <div className="mt-1 truncate">Static model list · {MODEL_CONFIGS.length} verified models</div>
-                </div>
-                <div className="space-y-1">
-                  {MODEL_CONFIGS.map((model) => {
-                    const checked = selectedModelIds.includes(model.id);
-                    const disabled = !checked && selectedModelIds.length >= MAX_SELECTED_MODELS;
-                    return (
+              <div className="absolute left-0 top-12 z-20 min-w-72 w-[min(680px,calc(100vw-19rem))] rounded-xl border border-border bg-card shadow-2xl">
+                <div className="border-b border-border px-3 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium text-foreground">选择对比模型</div>
+                      <div className="mt-1 text-xs text-muted">
+                        已验证 {MODEL_CONFIGS.length} 个模型，最多选择 {MAX_SELECTED_MODELS} 个并行对比
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowModelMenu(false)}
+                      className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-card-hover hover:text-foreground"
+                      title="关闭"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                        <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {selectedModels.map((model) => (
                       <button
                         key={model.id}
+                        type="button"
                         onClick={() => toggleModel(model.id)}
-                        disabled={disabled}
-                        className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
-                          checked ? "bg-primary/10 text-primary" : "text-foreground hover:bg-card-hover disabled:text-muted/40"
+                        disabled={streaming || selectedModelIds.length === 1}
+                        className="flex max-w-56 items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-left text-xs text-primary transition-colors hover:border-primary/60 disabled:cursor-not-allowed disabled:opacity-60"
+                        title={selectedModelIds.length === 1 ? "至少保留一个模型" : "移除模型"}
+                      >
+                        <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary" />
+                        <span className="truncate">{model.shortName}</span>
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+                          <path d="M3 3l6 6M9 3 3 9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                        </svg>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="border-b border-border px-3 py-3">
+                  <div className="relative">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="absolute left-3 top-1/2 -translate-y-1/2 text-muted">
+                      <circle cx="7" cy="7" r="4.5" stroke="currentColor" strokeWidth="1.4" />
+                      <path d="M10.5 10.5 13 13" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                    </svg>
+                    <input
+                      value={modelSearch}
+                      onChange={(event) => setModelSearch(event.target.value)}
+                      placeholder="搜索模型、厂商或能力，例如 GLM / DeepSeek / 视觉 / 代码"
+                      className="h-9 w-full rounded-lg border border-border bg-background pl-9 pr-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted focus:border-primary/70"
+                    />
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {MODEL_FILTERS.map((filter) => (
+                      <button
+                        key={filter.id}
+                        type="button"
+                        onClick={() => setModelFilter(filter.id)}
+                        className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
+                          modelFilter === filter.id
+                            ? "bg-primary text-white"
+                            : "border border-border bg-background text-muted hover:border-primary/50 hover:text-foreground"
                         }`}
                       >
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-medium">{model.name}</div>
-                          <div className="truncate text-[11px] text-muted">{model.providerModelId}</div>
-                          <div className="truncate text-[10px] text-muted/80">
-                            {model.provider === "volcengine" ? "Volcengine Ark" : "DeepSeek Official"}
+                        {filter.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="max-h-[480px] overflow-y-auto p-2">
+                  {groupedModels.length === 0 ? (
+                    <div className="flex h-28 items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted">
+                      没有找到匹配模型
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {groupedModels.map((group) => (
+                        <div key={group.id}>
+                          <div className="mb-1.5 flex items-center justify-between px-1">
+                            <div>
+                              <div className="text-xs font-medium text-foreground">{group.title}</div>
+                              <div className="text-[11px] text-muted">{group.description}</div>
+                            </div>
+                            <span className="text-[11px] text-muted">{group.models.length}</span>
+                          </div>
+                          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                            {group.models.map((model) => {
+                              const checked = selectedModelIds.includes(model.id);
+                              const disabled = !checked && selectedModelIds.length >= MAX_SELECTED_MODELS;
+                              const tags = getModelCapabilityTags(model);
+
+                              return (
+                                <button
+                                  key={`${group.id}-${model.id}`}
+                                  type="button"
+                                  onClick={() => toggleModel(model.id)}
+                                  disabled={streaming || disabled}
+                                  className={`min-h-[92px] rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed ${
+                                    checked
+                                      ? "border-primary/60 bg-primary/10 text-primary"
+                                      : disabled
+                                        ? "border-border bg-background text-muted/40"
+                                        : "border-border bg-background text-foreground hover:border-primary/50 hover:bg-card-hover"
+                                  }`}
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <div className="truncate text-sm font-medium">{model.name}</div>
+                                      <div className="mt-1 truncate text-[11px] text-muted">{model.providerModelId}</div>
+                                    </div>
+                                    <div
+                                      className={`mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border ${
+                                        checked ? "border-primary bg-primary" : "border-border"
+                                      }`}
+                                    >
+                                      {checked && (
+                                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                                          <path d="M3.5 7.2 5.7 9.4 10.5 4.5" stroke="white" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                                        </svg>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="mt-2 flex flex-wrap gap-1">
+                                    <span className="rounded bg-card px-1.5 py-0.5 text-[10px] text-muted">{getModelVendorLabel(model)}</span>
+                                    {tags.map((tag) => (
+                                      <span key={tag} className="rounded bg-card px-1.5 py-0.5 text-[10px] text-muted">
+                                        {tag}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </button>
+                              );
+                            })}
                           </div>
                         </div>
-                        <div className={`h-4 w-4 rounded border ${checked ? "border-primary bg-primary" : "border-border"}`}>
-                          {checked && (
-                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                              <path d="M4 8.2l2.4 2.4L12 5" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-                          )}
-                        </div>
-                      </button>
-                    );
-                  })}
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between border-t border-border px-3 py-2 text-xs text-muted">
+                  <span>
+                    已选 {selectedModelIds.length}/{MAX_SELECTED_MODELS}
+                    {selectedModelIds.length >= MAX_SELECTED_MODELS ? " · 已达上限" : ""}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModelSearch("");
+                      setModelFilter("all");
+                    }}
+                    className="text-muted transition-colors hover:text-primary"
+                  >
+                    清除筛选
+                  </button>
                 </div>
               </div>
             )}
