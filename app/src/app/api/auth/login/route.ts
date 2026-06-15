@@ -16,11 +16,12 @@ export async function POST(req: NextRequest) {
     }
 
     const token = await createToken({ userId: user.id, email: user.email, name: user.name });
+    const isSecureRequest = req.nextUrl.protocol === "https:" || req.headers.get("x-forwarded-proto") === "https";
 
     const res = NextResponse.json({ user: { id: user.id, email: user.email, name: user.name } });
     res.cookies.set("token", token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: isSecureRequest,
       sameSite: "lax",
       maxAge: 60 * 60 * 24 * 7,
       path: "/",
