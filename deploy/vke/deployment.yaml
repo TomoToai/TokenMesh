@@ -19,6 +19,16 @@ spec:
     spec:
       imagePullSecrets:
         - name: tokenmesh-cr-auth
+      initContainers:
+        - name: prepare-tokenmesh-data
+          image: limengtao-cr-demo-cn-beijing.cr.volces.com/limengtao-codex/limengtao-codex:REPLACE_WITH_TAG
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "mkdir -p /app/data && chown -R 1001:1001 /app/data"]
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: tokenmesh-data
+              mountPath: /app/data
       containers:
         - name: tokenmesh-web
           image: limengtao-cr-demo-cn-beijing.cr.volces.com/limengtao-codex/limengtao-codex:REPLACE_WITH_TAG
