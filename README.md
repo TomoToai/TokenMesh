@@ -52,7 +52,9 @@ TokenMesh 不仅仅是一个大模型聚合网关——我们是 **Web3 原生**
 
 Chat 页面顶部提供模型选择器，当前支持从火山方舟和 DeepSeek 官方 API 中选择 1-3 个模型，用同一个处理后的 Prompt 并行调用并对比输出。用户可以只选择一个模型进行普通单聊，也可以选择多个模型进入对比模式。
 
-MVP 阶段采用静态模型白名单，模型清单维护在 `app/src/lib/models.ts`。当前清单包含 14 个火山方舟模型和 2 个 DeepSeek 官方 API 模型，并已使用当前可用 API Key 完成最小请求验证。这样部署时只需要模型调用 Key，不依赖火山管控面 AK/SK，也避免发布环境因为动态发现失败影响模型选择器。
+MVP 阶段采用静态模型白名单，模型清单维护在 `app/src/lib/models.ts`。当前清单包含 22 个火山方舟模型和 2 个 DeepSeek 官方 API 模型，并已使用当前可用 API Key 完成最小请求验证。这样部署时只需要模型调用 Key，不依赖火山管控面 AK/SK，也避免发布环境因为动态发现失败影响模型选择器。
+
+说明：火山方舟 Agent / Coding Plan 文档中还列有 `glm-5.1`、`kimi-k2.6`、`minimax-m2.7`、`minimax-m3` 等 Model Name；这些模型使用当前 Chat Completions API Key 探测时返回 404，暂不放入主选择器。后续如果开通对应套餐或拿到可调用 endpoint，再加入白名单。
 
 当前内置候选模型：
 
@@ -72,6 +74,14 @@ MVP 阶段采用静态模型白名单，模型清单维护在 `app/src/lib/model
 | `tokenmesh-doubao-seed-1-6-vision-250815` | `doubao-seed-1-6-vision-250815` | 豆包 Seed 1.6 Vision |
 | `tokenmesh-doubao-1-5-pro-32k-250115` | `doubao-1-5-pro-32k-250115` | 豆包 1.5 Pro 32K |
 | `tokenmesh-doubao-1-5-pro-32k-character-250715` | `doubao-1-5-pro-32k-character-250715` | 豆包 1.5 Pro 32K Character |
+| `tokenmesh-doubao-1-5-lite-32k-250115` | `doubao-1-5-lite-32k-250115` | 豆包 1.5 Lite 32K |
+| `tokenmesh-doubao-1-5-vision-pro-32k-250115` | `doubao-1-5-vision-pro-32k-250115` | 豆包 1.5 Vision Pro 32K |
+| `tokenmesh-doubao-seed-1-6-251015` | `doubao-seed-1-6-251015` | 豆包 Seed 1.6 新版本 |
+| `tokenmesh-doubao-seed-code-preview-251028` | `doubao-seed-code-preview-251028` | 豆包 Seed Code Preview 新版本 |
+| `tokenmesh-deepseek-v3-2-251201-ark` | `deepseek-v3-2-251201` | DeepSeek V3.2（火山方舟托管） |
+| `tokenmesh-deepseek-v4-flash-260425-ark` | `deepseek-v4-flash-260425` | DeepSeek V4 Flash（火山方舟托管） |
+| `tokenmesh-deepseek-v4-pro-260425-ark` | `deepseek-v4-pro-260425` | DeepSeek V4 Pro（火山方舟托管） |
+| `tokenmesh-glm-4-7-251222` | `glm-4-7-251222` | 智谱 GLM-4.7（火山方舟托管） |
 | `tokenmesh-deepseek-v4-flash` | `deepseek-v4-flash` | DeepSeek V4 Flash（DeepSeek 官方 API） |
 | `tokenmesh-deepseek-v4-pro` | `deepseek-v4-pro` | DeepSeek V4 Pro（DeepSeek 官方 API） |
 
@@ -111,6 +121,7 @@ Chat 输入框提供“Web”开关，默认关闭。用户开启后，服务端
 | 认证 | JWT (jose) + bcrypt (bcryptjs) |
 | AI API | 火山方舟 Ark API / DeepSeek 官方 API (OpenAI 兼容格式) |
 | 联网搜索 | 火山引擎联网搜索 API |
+| MCP | Model Context Protocol Streamable HTTP |
 | 文件解析 | pdf-parse / 浏览器 File API |
 | Web3 支付 | 智能合约 + Wallet Connect（规划中） |
 | 算力共享 | 分布式算力调度引擎（规划中） |
@@ -151,6 +162,28 @@ JWT_SECRET=your-jwt-secret
 > `ARK_API_KEY` 用于火山方舟模型调用；`DEEPSEEK_API_KEY` 用于 DeepSeek 官方 API 模型调用。模型列表为静态白名单，新增或下线模型时修改 `app/src/lib/models.ts` 后重新发版。
 >
 > 联网搜索需要单独配置火山引擎联网搜索 API Key。未配置时，开启 Web 搜索会展示明确错误，并自动继续普通模型调用。
+
+## MCP 服务能力
+
+TokenMesh 同时提供一个无认证的 MCP Server，供 Claw 等 MCP Client 调用项目能力。
+
+- 协议：Streamable HTTP
+- 路径：`/mcp`
+- 本地地址：`http://localhost:3000/mcp`
+- VKE / 生产地址示例：`https://your-tokenmesh-domain.example/mcp`
+- 访问认证：无
+
+当前暴露工具：
+
+| Tool | 说明 |
+|------|------|
+| `list_models` | 返回当前静态模型白名单 |
+| `chat_completion` | 调用单个 TokenMesh 模型 |
+| `compare_models` | 最多 3 个模型并行对比 |
+| `web_search` | 调用火山引擎联网搜索并返回来源 |
+| `chat_with_web_search` | 先联网搜索，再把来源上下文注入模型回答 |
+
+Claw 配置 MCP Server 时，选择 Streamable HTTP，并把访问地址填写为部署后的 `/mcp` 完整 URL，例如 `https://your-tokenmesh-domain.example/mcp`。请确保 Claw 实例所在网络可以访问该域名。
 
 ### 3. 启动开发服务器
 
@@ -195,12 +228,15 @@ TokenMesh/
     │   ├── lib/
     │   │   ├── auth.ts             # JWT 认证
     │   │   ├── db.ts               # SQLite 数据库
+    │   │   ├── mcp-server.ts       # MCP 工具注册
+    │   │   ├── model-runtime.ts    # 模型调用运行时
     │   │   └── models.ts           # 静态模型白名单与模型 ID 规范化
     │   └── app/
     │       ├── page.tsx            # 首页
     │       ├── login/page.tsx      # 登录页
     │       ├── register/page.tsx   # 注册页
     │       ├── chat/page.tsx       # Chat 对话页
+    │       ├── mcp/                # MCP Streamable HTTP endpoint
     │       └── api/
     │           ├── auth/           # 认证 API
     │           │   ├── register/   # 注册
@@ -221,6 +257,7 @@ TokenMesh/
 | POST | `/api/auth/login` | 用户登录 |
 | POST | `/api/auth/logout` | 退出登录 |
 | GET | `/api/auth/me` | 获取当前用户 |
+| POST | `/mcp` | MCP Server（Streamable HTTP，无认证） |
 | POST | `/api/chat` | AI 对话（流式 SSE） |
 | POST | `/api/files/extract` | 文件文本抽取（文本 / PDF） |
 | GET | `/api/conversations` | 对话列表 |
@@ -246,6 +283,7 @@ npm run build
 - 模型耗时 / Tokens / Reasoning / Answer 展示
 - 多模型结果持久化
 - 联网搜索（火山引擎，最多 5 条来源，多模型共享）
+- MCP Server（Streamable HTTP，无认证，供 Claw 调用）
 - 对话管理（新建 / 切换 / 删除 / 重命名）
 - Chat 文件上传（文本 / PDF / 图片）
 

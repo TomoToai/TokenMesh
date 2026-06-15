@@ -83,6 +83,22 @@ kubectl get svc tokenmesh-web -n tokenmesh
 
 The service is `LoadBalancer` type and forwards public port `80` to container port `3001`.
 
+## MCP Endpoint
+
+TokenMesh exposes the MCP Server on the same web service:
+
+- Protocol: Streamable HTTP
+- Path: `/mcp`
+- Authentication: none
+
+After the service is reachable through CLB/EIP or a domain, configure Claw with:
+
+```text
+https://YOUR_TOKENMESH_DOMAIN/mcp
+```
+
+Make sure the Claw instance network can reach this address.
+
 ## Important MVP Constraint
 
 TokenMesh currently uses SQLite. The VKE deployment is intentionally configured as:
