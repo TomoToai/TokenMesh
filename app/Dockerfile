@@ -13,7 +13,7 @@ RUN apt-get update \
 
 COPY package.json package-lock.json ./
 RUN npm config set registry ${NPM_CONFIG_REGISTRY}
-RUN npm install -g npm@11
+RUN npm install -g npm@11.6.2
 RUN npm ci
 
 FROM ${NODE_IMAGE} AS builder
